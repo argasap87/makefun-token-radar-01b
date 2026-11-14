@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="logo">◉</div>
+    <div>
+      <h1>TOKEN RADAR</h1>
+      <p class="tagline">Pre-token protocols, ranked by what their launch would be worth.</p>
+    </div>
+  </div>
+  <div class="model-note">
+    <strong>Implied value</strong> = TVL &times; category &times; momentum &times; age &times; early &times; breadth.
+    Built only from the snapshot's own figures — no protocol is placed by name.
+  </div>
+</header>
+
+<main>
+  <section class="stats" id="stats"></section>
+
+  <section class="controls">
+    <div class="tabs" role="tablist">
+      <button id="tab-pre" class="tab active" role="tab">Pre-token board</button>
+      <button id="tab-live" class="tab" role="tab">Already live</button>
+    </div>
+    <div class="filters">
+      <input id="search" type="search" placeholder="Search a protocol…" autocomplete="off">
+      <select id="category" aria-label="Category"></select>
+      <select id="chain" aria-label="Chain"></select>
+      <label class="watch-toggle"><input id="watchlist" type="checkbox"> Watchlist only</label>
+    </div>
+  </section>
+
+  <section class="table-wrap">
+    <table id="board">
+      <thead>
+        <tr>
+          <th data-sort="rank" class="num sorted">Rank</th>
+          <th data-sort="name">Protocol</th>
+          <th data-sort="category">Category</th>
+          <th>Chains</th>
+          <th data-sort="tvl_usd" class="num">TVL</th>
+          <th data-sort="change_7d" class="num">7d</th>
+          <th data-sort="implied_value_usd" class="num">Implied value</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="empty" class="empty" hidden>No protocol matches these filters.</p>
+  </section>
+
+  <p class="caveat">A protocol is listed as pre-token because its record shows no token — that is the record's word, not proof it has none. Implied values are this radar's own claim, never a promise of a launch, a price, or a date.</p>
+</main>
+
+<aside id="drawer" class="drawer" hidden aria-label="Protocol detail">
+  <div class="drawer-head">
+    <div>
+      <h2 id="d-name"></h2>
+      <p id="d-sub" class="muted"></p>
+    </div>
+    <button id="d-close" class="close" aria-label="Close detail">×</button>
+  </div>
+  <dl class="facts" id="d-facts"></dl>
+  <h3>How the value is built</h3>
+  <table class="factors" id="d-factors"></table>
+  <h3>Farm plan — 7 steps</h3>
+  <ol class="steps" id="d-steps"></ol>
+  <p class="muted small">Costs are rough on-chain estimates for the protocol's main chain. Never risk more than you can afford to lose, and never pay anyone who promises you an allocation.</p>
+</aside>
+<div id="backdrop" class="backdrop" hidden></div>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
