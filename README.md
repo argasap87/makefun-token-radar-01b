@@ -1,54 +1,57 @@
-# Token Radar
+# Token Radar — radar-4
 
-A token launch radar: pre-token protocols ranked by what their launch would
-be worth, each with the steps to farm it. Built for the make.fun
-token-radar-01 bounty.
+Which pre-token protocol launches biggest? A radar over DeFiLlama's public
+protocol list, ranked by an implied launch value that is a plain function of
+the snapshot — no protocol is placed by name.
 
-## The model (radar-3)
+## Model (unchanged since radar-3)
 
-```
-implied = TVL x categoryMultiple x momentum x age x early x breadth
-```
+    implied = TVL × categoryMultiple × momentum × age × early × breadth
 
-- **TVL** — the protocol's total value locked, from the snapshot.
-- **categoryMultiple** — Options and Synthetics 0.40; Collateral Markets,
-  Basis Trading, Farm and Liquidity Manager 0.35; every other category 0.30.
-- **momentum** — the seven-day TVL change: `1 + clamp(change_7d, -50, 100)/100`.
-- **age** — how long the protocol has run: `1 + 0.15 x min(years, 4)`.
-- **early** — how early the reader still is: `1 + 0.5 x exp(-years / 1.5)`.
-- **breadth** — how many chains hold its TVL: `1 + 0.05 x min(chains, 8)`.
+- **categoryMultiple**: Options / Synthetics 0.40; Collateral Markets,
+  Basis Trading, Farm, Liquidity Manager 0.35; every other category 0.30.
+- **momentum**: 1 + 7-day TVL change, clamped to −50…+100%.
+- **age**: 1 + 0.15 × years running, capped at 4 years.
+- **early**: 1 + 0.5 × e^(−years / 1.5) — younger protocols score higher,
+  because a launch is more of the story.
+- **breadth**: 1 + 0.05 × chains, capped at 8.
 
-Every factor is a plain function of a field the snapshot carries, so the
-board is reproducible from the snapshot alone and no protocol is placed by
-name. The board holds 226 rows: the 40 watchlist protocols plus the
-pre-token protocols below the $50M floor with the most TVL. A protocol
-below the floor, or one the watchlist leaves out, is no worse a subject:
-the floor is where the reading starts, not where it stops.
+## Board
 
-## The dashboard
+226 rows: the 40 watchlist protocols, plus the pre-token protocols below
+the $50M floor with the most TVL. A protocol counts as pre-token when the
+snapshot records no token for it (`gecko_id` and `symbol` both empty) —
+never "has none", only "records no token". This run's top 5: Steakhouse
+Financial, Gauntlet, Veda, USDD, Upshift.
 
-`dashboard/` is a page that renders with no network: a sortable, filterable
-table (search, category and chain filters, watchlist toggle, pre-token and
-already-live tabs) and a detail drawer for every protocol showing all five
-model factors and its seven-step farm plan. The page reads `data.js`, which
-`main.ts` writes beside it.
+## Farm plans (radar-4)
 
-## Run it
+Each row carries a 7-step farm plan built from that protocol's own record —
+its name, category, chains, TVL, 7-day change, age and rank. Ten playbooks
+cover the category families (curators, exchanges, lending, yield, RWA,
+staking, bridges, basis, options, everything else), and every step quotes
+the row's own numbers: a test deposit sized to its TVL, gas on its first
+chain, its rank and implied value with all five factors shown, and a cap
+per position. No step is shared between two rows.
 
-```
-MAKEFUN_OUTPUT_DIR=out node main.ts --input <kit>/input/snapshot.json
-```
+## Dashboard
 
-`main.ts` reads the sealed snapshot, writes `board.json`, `data.js`, copies
-`dashboard/` and `screenshots/` into the output directory, and writes
-`dossier.json` with `buildDossier` from `vendor/makefun-board.ts`. It is
-deterministic: two runs write the same bytes.
+`dashboard/` is a dependency-free page over `data.js`: a sortable,
+filterable table (search, category and chain filters, watchlist toggle,
+pre-token / already-live tabs), a detail drawer per protocol showing all
+five model factors and the identical 7-step farm plan, and a
+category-diversity strip — the strongest protocol in each of the strongest
+non-curator categories — because the top of the board is vault-curator
+heavy. The strip does not change the model; it only surfaces breadth.
 
-## Calibration
+Deep links: `#p=<slug>` opens a protocol's drawer,
+`#category=<name>` filters to a category.
 
-The model was checked against a live DeFiLlama fetch
-(`https://api.llama.fi/protocols`, 14 November 2026) before it was frozen:
-on that universe it ranks Steakhouse Financial first, then Gauntlet, Veda,
-USDD and Upshift, with Symbiotic near the top of the watchlist. The program
-itself reads only the sealed snapshot, never the network, so the graded
-runs see the snapshot's own figures.
+## Run
+
+    MAKEFUN_OUTPUT_DIR=out node main.ts --input <kit>/input/snapshot.json
+
+Reads `/input/snapshot.json`, writes `/output/board.json`, `data.js`,
+`dashboard/`, `screenshots/` and `dossier.json`. The program is
+deterministic: running it twice writes byte-identical board.json, data.js
+and dossier.json.

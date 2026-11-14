@@ -3,77 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocols ranked by implied value</title>
+<title>Token Radar — which pre-token protocol launches biggest</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand">
-    <div class="logo">◉</div>
-    <div>
-      <h1>TOKEN RADAR</h1>
-      <p class="tagline">Pre-token protocols, ranked by what their launch would be worth.</p>
-    </div>
+  <div class="title">
+    <h1>Token Radar</h1>
+    <p class="sub">226 pre-token protocols, ranked by implied launch value. TVL &times; category multiple &times; momentum &times; age &times; early &times; breadth — nothing ranked by name.</p>
   </div>
-  <div class="model-note">
-    <strong>Implied value</strong> = TVL &times; category &times; momentum &times; age &times; early &times; breadth.
-    Built only from the snapshot's own figures — no protocol is placed by name.
-  </div>
+  <div class="meta" id="meta">Loading…</div>
 </header>
 
+<section class="strip" id="strip" aria-label="Leaders outside the curator cluster">
+  <div class="strip-label">Beyond the curators — leaders in other categories</div>
+  <div class="strip-chips" id="strip-chips"></div>
+  <p class="strip-note">The top of the board is vault-curator heavy, so this strip surfaces the strongest protocol in each of the other categories. The model is unchanged: curators simply hold the most TVL.</p>
+</section>
+
+<section class="controls">
+  <input id="search" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
+  <select id="category" aria-label="Filter by category"><option value="">All categories</option></select>
+  <select id="chain" aria-label="Filter by chain"><option value="">All chains</option></select>
+  <label class="watch"><input id="watchonly" type="checkbox"> Watchlist only</label>
+  <div class="tabs" role="tablist">
+    <button id="tab-pre" role="tab" aria-selected="true">Pre-token board</button>
+    <button id="tab-live" role="tab" aria-selected="false">Already live</button>
+  </div>
+</section>
+
 <main>
-  <section class="stats" id="stats"></section>
-
-  <section class="controls">
-    <div class="tabs" role="tablist">
-      <button id="tab-pre" class="tab active" role="tab">Pre-token board</button>
-      <button id="tab-live" class="tab" role="tab">Already live</button>
-    </div>
-    <div class="filters">
-      <input id="search" type="search" placeholder="Search a protocol…" autocomplete="off">
-      <select id="category" aria-label="Category"></select>
-      <select id="chain" aria-label="Chain"></select>
-      <label class="watch-toggle"><input id="watchlist" type="checkbox"> Watchlist only</label>
-    </div>
-  </section>
-
-  <section class="table-wrap">
-    <table id="board">
-      <thead>
-        <tr>
-          <th data-sort="rank" class="num sorted">Rank</th>
-          <th data-sort="name">Protocol</th>
-          <th data-sort="category">Category</th>
-          <th>Chains</th>
-          <th data-sort="tvl_usd" class="num">TVL</th>
-          <th data-sort="change_7d" class="num">7d</th>
-          <th data-sort="implied_value_usd" class="num">Implied value</th>
-        </tr>
-      </thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <p id="empty" class="empty" hidden>No protocol matches these filters.</p>
-  </section>
-
-  <p class="caveat">A protocol is listed as pre-token because its record shows no token — that is the record's word, not proof it has none. Implied values are this radar's own claim, never a promise of a launch, a price, or a date.</p>
+  <table id="board">
+    <thead>
+      <tr>
+        <th data-sort="rank">#</th>
+        <th data-sort="name">Protocol</th>
+        <th data-sort="category">Category</th>
+        <th>Chains</th>
+        <th data-sort="tvl_usd">TVL</th>
+        <th data-sort="change_7d">7d</th>
+        <th data-sort="implied_value_usd">Implied value</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="count" id="count"></p>
+  <p class="live-note" id="live-note" hidden>These protocols already have a token trading. They are here for contrast: the board above ranks what has <strong>not</strong> launched yet. A live protocol can still grow, but it cannot have a first launch.</p>
 </main>
 
-<aside id="drawer" class="drawer" hidden aria-label="Protocol detail">
-  <div class="drawer-head">
-    <div>
-      <h2 id="d-name"></h2>
-      <p id="d-sub" class="muted"></p>
-    </div>
-    <button id="d-close" class="close" aria-label="Close detail">×</button>
-  </div>
-  <dl class="facts" id="d-facts"></dl>
-  <h3>How the value is built</h3>
-  <table class="factors" id="d-factors"></table>
-  <h3>Farm plan — 7 steps</h3>
-  <ol class="steps" id="d-steps"></ol>
-  <p class="muted small">Costs are rough on-chain estimates for the protocol's main chain. Never risk more than you can afford to lose, and never pay anyone who promises you an allocation.</p>
+<aside class="drawer" id="drawer" hidden>
+  <button class="close" id="drawer-close" aria-label="Close details">×</button>
+  <div id="drawer-body"></div>
 </aside>
-<div id="backdrop" class="backdrop" hidden></div>
+
+<footer>
+  <p>Model: implied = TVL &times; category multiple (Options/Synthetics 0.40; Collateral Markets, Basis Trading, Farm, Liquidity Manager 0.35; all else 0.30) &times; momentum (1 + 7d change clamped −50…+100%) &times; age (1 + 0.15 &times; years, capped 4) &times; early (1 + 0.5 &times; e<sup>−years/1.5</sup>) &times; breadth (1 + 0.05 &times; chains, capped 8). Data: DeFiLlama public API, snapshot as of the date shown. Farm plans are per-protocol: each step uses that protocol's own TVL, chains, age, change and rank. Nothing here is financial advice.</p>
+</footer>
 
 <script src="../data.js"></script>
 <script src="app.js"></script>

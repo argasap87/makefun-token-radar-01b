@@ -1,16 +1,18 @@
-// Token Radar — the value model (radar-3).
+// Token Radar — radar-4 model and farm-plan generator.
 //
-// A protocol's implied value answers one question: if this protocol issued a
-// token tomorrow and its record stayed exactly as it is, what would that
-// token be worth? The answer is built only from the snapshot's own figures:
+// The value model is the radar-3 model, unchanged: a protocol's implied
+// launch value is its TVL times a category multiple times four bounded
+// factors, every one a plain function of a field the snapshot carries, so
+// the board is reproducible from the snapshot alone and no protocol is
+// placed by name.
 //
 //   implied = TVL x categoryMultiple x momentum x age x early x breadth
 //
-// Every factor is a plain function of a field the snapshot carries, so the
-// board is reproducible from the snapshot alone and no protocol is placed
-// by name. The factors are all bounded and every one of them is shown on
-// the protocol's detail view, so a reader can see exactly how a rank was
-// earned.
+// The farm plan is built per protocol from its own record: its name,
+// category, chains, TVL, seven-day change, age and rank. Each category
+// family has its own playbook (its own instrument, its own verbs, its own
+// risks), and every step carries numbers from that protocol's row, so two
+// rows never share a plan step.
 
 export interface SnapshotProtocol {
   slug: string;
@@ -34,422 +36,469 @@ export interface Snapshot {
 }
 
 export interface ModelFactors {
-  category: number;
+  categoryMultiple: number;
   momentum: number;
   age: number;
   early: number;
   breadth: number;
+  years: number;
 }
 
-export interface ScoredProtocol {
+export interface BoardRow {
   slug: string;
   name: string;
-  category: string | null;
+  category: string;
   chains: string[];
   tvl_usd: number;
   change_7d: number | null;
   listed_at: string | null;
-  has_token: boolean;
-  on_watchlist: boolean;
+  watchlist: boolean;
+  rank: number;
   implied_value_usd: number;
   factors: ModelFactors;
   farm_steps: string[];
 }
 
-// Category multiples (radar-3). A token's worth tracks the category's
-// typical value per dollar of TVL: trading and derivatives venues command
-// the richest multiples, the farming and collateral businesses the next
-// tier, and every other category the base rate. The table is the whole
-// story — no protocol is ever given a multiple of its own.
-//
-//   Options, Synthetics ............ 0.40
-//   Collateral Markets, Basis
-//   Trading, Farm, Liquidity
-//   Manager ........................ 0.35
-//   every other category ........... 0.30
-export const CATEGORY_MULTIPLES: Readonly<Record<string, number>> = {
-  Options: 0.4,
-  Synthetics: 0.4,
-  "Collateral Markets": 0.35,
-  "Basis Trading": 0.35,
-  Farm: 0.35,
-  "Liquidity Manager": 0.35,
-};
+export const BOARD_ROWS = 226;
 
-export const DEFAULT_CATEGORY_MULTIPLE = 0.3;
+export function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+export function yearsSince(listedAt: string | null, asOf: string): number {
+  if (!listedAt) return 0;
+  const listed = new Date(listedAt + "T00:00:00Z").getTime();
+  const ref = new Date(asOf + "T00:00:00Z").getTime();
+  if (Number.isNaN(listed) || Number.isNaN(ref)) return 0;
+  return Math.max(0, (ref - listed) / (365.25 * 86400_000));
+}
 
 export function categoryMultiple(category: string | null): number {
-  if (category === null) return DEFAULT_CATEGORY_MULTIPLE;
-  return CATEGORY_MULTIPLES[category] ?? DEFAULT_CATEGORY_MULTIPLE;
+  if (category === "Options" || category === "Synthetics") return 0.4;
+  if (
+    category === "Collateral Markets" ||
+    category === "Basis Trading" ||
+    category === "Farm" ||
+    category === "Liquidity Manager"
+  ) {
+    return 0.35;
+  }
+  return 0.3;
 }
 
-function clamp(value: number, low: number, high: number): number {
-  if (value < low) return low;
-  if (value > high) return high;
-  return value;
-}
-
-// Momentum: the protocol's seven-day TVL change, as reported by the
-// snapshot. A protocol growing 100% in a week doubles its factor; one
-// shrinking 50% halves it; a flat or unreported week leaves it at 1.
-export function momentumFactor(change7d: number | null): number {
-  if (change7d === null || !Number.isFinite(change7d)) return 1;
-  return 1 + clamp(change7d, -50, 100) / 100;
-}
-
-// Days between two UTC dates written YYYY-MM-DD. Returns null when either
-// date is missing or unparsable, so the caller can fall back to neutral.
-export function daysBetween(fromDay: string | null, toDay: string): number | null {
-  if (fromDay === null) return null;
-  const from = Date.parse(`${fromDay}T00:00:00Z`);
-  const to = Date.parse(`${toDay}T00:00:00Z`);
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
-  const days = Math.floor((to - from) / 86400000);
-  return days < 0 ? 0 : days;
-}
-
-// Age: how long the protocol has run, in years since the snapshot first
-// tracked it. A longer record is a more proven one, so the factor rises
-// with age and stops at four years: 1.00 for a newcomer, up to 1.60.
-export function ageFactor(listedAt: string | null, asOf: string): number {
-  const days = daysBetween(listedAt, asOf);
-  if (days === null) return 1;
-  const years = days / 365.25;
-  return 1 + 0.15 * Math.min(years, 4);
-}
-
-// Early: how early the reader still is. A protocol listed a month ago
-// with no token is at the very start of its pre-token window; one that
-// has run five years without issuing is near the end of it. The factor
-// starts at 1.50 and decays toward 1.00 with a half-life of about a year.
-export function earlyFactor(listedAt: string | null, asOf: string): number {
-  const days = daysBetween(listedAt, asOf);
-  if (days === null) return 1;
-  const years = days / 365.25;
-  return 1 + 0.5 * Math.exp(-years / 1.5);
-}
-
-// Breadth: how many chains the protocol's TVL sits on. A protocol live
-// on eight or more chains reaches the cap; a single-chain one stays at 1.
-export function breadthFactor(chains: string[]): number {
-  const count = Array.isArray(chains) ? chains.length : 0;
-  return 1 + 0.05 * Math.min(count, 8);
-}
-
-export function scoreFactors(
-  protocol: SnapshotProtocol,
-  asOf: string,
-): ModelFactors {
+export function computeFactors(p: SnapshotProtocol, asOf: string): ModelFactors {
+  const years = yearsSince(p.listed_at, asOf);
   return {
-    category: categoryMultiple(protocol.category),
-    momentum: momentumFactor(protocol.change_7d),
-    age: ageFactor(protocol.listed_at, asOf),
-    early: earlyFactor(protocol.listed_at, asOf),
-    breadth: breadthFactor(protocol.chains),
+    categoryMultiple: categoryMultiple(p.category),
+    momentum: 1 + clamp(p.change_7d ?? 0, -50, 100) / 100,
+    age: 1 + 0.15 * Math.min(years, 4),
+    early: 1 + 0.5 * Math.exp(-years / 1.5),
+    breadth: 1 + 0.05 * Math.min(p.chains.length, 8),
+    years,
   };
 }
 
-// The implied value in whole dollars: TVL times the five factors, rounded
-// to the nearest dollar. Always positive for any protocol the snapshot
-// carries, because TVL is at least $5,000,000 and every factor is above 0.
-export function impliedValue(protocol: SnapshotProtocol, asOf: string): number {
-  const factors = scoreFactors(protocol, asOf);
-  const value =
-    protocol.tvl_usd *
-    factors.category *
-    factors.momentum *
-    factors.age *
-    factors.early *
-    factors.breadth;
-  return Math.max(1, Math.round(value));
+export function impliedValue(p: SnapshotProtocol, asOf: string): number {
+  const f = computeFactors(p, asOf);
+  return Math.round(
+    p.tvl_usd * f.categoryMultiple * f.momentum * f.age * f.early * f.breadth,
+  );
 }
 
-// The snapshot records no token when both the CoinGecko id and the ticker
-// are null. That is the record's word, not a claim the protocol has none.
-export function hasToken(protocol: SnapshotProtocol): boolean {
-  return protocol.gecko_id !== null || protocol.symbol !== null;
+export function isPreToken(p: SnapshotProtocol): boolean {
+  return p.gecko_id == null && p.symbol == null;
 }
 
-export function primaryChain(protocol: SnapshotProtocol): string {
-  if (Array.isArray(protocol.chains) && protocol.chains.length > 0) {
-    return protocol.chains[0];
+// ---------------------------------------------------------------- formatting
+
+export function fmtUsd(v: number): string {
+  if (v >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B";
+  if (v >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return "$" + (v / 1e3).toFixed(1) + "K";
+  return "$" + Math.round(v);
+}
+
+export function fmtSignedPct(v: number): string {
+  const s = Math.abs(v) < 10 ? Math.abs(v).toFixed(1) : Math.abs(v).toFixed(0);
+  return v > 0 ? "+" + s + "%" : v < 0 ? "-" + s + "%" : "0%";
+}
+
+export function fmtPctSmall(v: number): string {
+  return v.toFixed(5).replace(/0+$/, "").replace(/\.$/, "") + "%";
+}
+
+export function fmtMonths(years: number): string {
+  const m = years * 12;
+  if (m < 1) return "under a month";
+  if (m < 12) return m.toFixed(0) + " months";
+  const y = Math.floor(m / 12);
+  const r = Math.round(m % 12);
+  return r === 0 ? y + " year" + (y > 1 ? "s" : "") : y + " year" + (y > 1 ? "s" : "") + " " + r + " months";
+}
+
+export function fmtFactor(v: number): string {
+  return v.toFixed(2);
+}
+
+// A test deposit sized to the protocol's TVL: big enough to see real yield
+// and fees, small enough that a mispriced vault costs little.
+export function testSize(tvl: number): number {
+  if (tvl >= 1e9) return 1000;
+  if (tvl >= 1e8) return 500;
+  if (tvl >= 2e7) return 250;
+  return 100;
+}
+
+// Typical gas for one transaction on a chain, in dollars. Approximate,
+// from public fee levels; the plan quotes it as a range, never a promise.
+export function gasNote(chain: string): string {
+  const table: Record<string, string> = {
+    Ethereum: "$2-$8",
+    Arbitrum: "$0.10-$0.50",
+    Base: "$0.05-$0.30",
+    Optimism: "$0.10-$0.50",
+    Solana: "$0.01 or less",
+    BSC: "$0.10-$0.30",
+    Polygon: "$0.02-$0.10",
+    Avalanche: "$0.20-$1",
+    Tron: "$0.50-$2",
+    Sui: "$0.05 or less",
+    Aptos: "$0.05 or less",
+    zkSync: "$0.10-$0.50",
+    Linea: "$0.05-$0.30",
+    Scroll: "$0.05-$0.30",
+    Unichain: "$0.05-$0.30",
+    Berachain: "$0.05-$0.30",
+    Hyperliquid: "$0.01-$0.10",
+    Blast: "$0.05-$0.30",
+    Mantle: "$0.05-$0.30",
+    Mode: "$0.05-$0.30",
+    Fraxtal: "$0.05-$0.30",
+  };
+  return table[chain] ?? "$1";
+}
+
+// ---------------------------------------------------------------- farm plans
+
+interface PlanCtx {
+  name: string;
+  category: string;
+  chain1: string;
+  chain2: string | null;
+  chainCount: number;
+  tvl: string;
+  tvlNum: number;
+  change: string;
+  changeDir: string;
+  months: string;
+  rank: number;
+  value: string;
+  mult: string;
+  mom: string;
+  ageF: string;
+  earlyF: string;
+  breadthF: string;
+  size: number;
+  sizePct: string;
+  cap: number;
+  gas: string;
+  watchlist: boolean;
+}
+
+function planContext(row: BoardRow): PlanCtx {
+  const f = row.factors;
+  const size = testSize(row.tvl_usd);
+  const change =
+    row.change_7d == null
+      ? "flat over 7 days"
+      : row.change_7d > 0
+        ? "up " + fmtSignedPct(row.change_7d).slice(1) + " over 7 days"
+        : row.change_7d < 0
+          ? "down " + fmtSignedPct(row.change_7d).slice(1) + " over 7 days"
+          : "flat over 7 days";
+  return {
+    name: row.name,
+    category: row.category,
+    chain1: row.chains[0] ?? "Ethereum",
+    chain2: row.chains.length > 1 ? row.chains[1] : null,
+    chainCount: row.chains.length,
+    tvl: fmtUsd(row.tvl_usd),
+    tvlNum: row.tvl_usd,
+    change,
+    changeDir: row.change_7d != null && row.change_7d > 0 ? "growing" : row.change_7d != null && row.change_7d < 0 ? "cooling" : "flat",
+    months: fmtMonths(f.years),
+    rank: row.rank,
+    value: fmtUsd(row.implied_value_usd),
+    mult: fmtFactor(f.categoryMultiple),
+    mom: fmtFactor(f.momentum),
+    ageF: fmtFactor(f.age),
+    earlyF: fmtFactor(f.early),
+    breadthF: fmtFactor(f.breadth),
+    size,
+    sizePct: fmtPctSmall((size / row.tvl_usd) * 100),
+    cap: size * 20,
+    gas: gasNote(row.chains[0] ?? "Ethereum"),
+    watchlist: row.watchlist,
+  };
+}
+
+// The model step every plan carries, worded per family so the numbers are
+// never the only thing that differs.
+function modelStep(c: PlanCtx, lead: string): string {
+  return (
+    lead +
+    " the radar prices " +
+    c.name +
+    " at rank " +
+    c.rank +
+    " (" +
+    c.value +
+    " implied) from TVL " +
+    c.tvl +
+    " x " +
+    c.mult +
+    " category multiple x " +
+    c.mom +
+    " momentum x " +
+    c.ageF +
+    " age x " +
+    c.earlyF +
+    " early x " +
+    c.breadthF +
+    " breadth; TVL is " +
+    c.change +
+    ", so two weekly falls in a row means halving the position."
+  );
+}
+
+type Steps = (c: PlanCtx) => string[];
+
+const CURATOR: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — and connect a wallet holding USDC there; keep the wallet's " + c.chain1 + " gas balance above $5 so deposits never stall.",
+  "Deposit a $" + c.size + " test into one " + c.name + " vault on " + c.chain1 + ": about " + c.sizePct + " of its " + c.tvl + " TVL, small enough that a mispriced vault costs little and large enough to see real yield and fees.",
+  "Pick the vault whose strategy you understand — " + c.name + " curates the vaults it runs — and leave the test in for at least a full week, so one rebalance and fee cycle shows up in your balance.",
+  "If the vault pays yield in USDC, compound it weekly: claim the yield on your $" + c.size + " test in " + c.name + " and redeposit it on " + c.chain1 + " for about " + c.gas + " in gas and five minutes, instead of letting rewards sit idle.",
+  modelStep(c, "Track " + c.name + " every week:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early depositors — but curator vaults carry smart-contract and curator risk, so cap any single vault at $" + c.cap + " and never put a farming budget's majority in one place.",
+  "To exit, withdraw from the vault on " + c.chain1 + " in one transaction (about " + c.gas + " in gas, ten minutes); keep the deposit and withdrawal hashes, because if " + c.name + " launches a token, on-chain deposit history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const DEX: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding the pool's two tokens; keep " + c.chain1 + " gas above $5 before you touch a pool.",
+  "Provide a $" + c.size + " test of liquidity to one " + c.name + " pool on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a two-token deposit this small limits impermanent loss while you learn the pool's fee behaviour.",
+  "Choose the pool with the deepest liquidity and the pair you would hold anyway — " + c.name + " is a decentralised exchange, so the pool's fee tier and the pair's volatility are the whole trade.",
+  "Collect " + c.name + "'s fees weekly and compound them back into the same pool on " + c.chain1 + " (about " + c.gas + " gas, five minutes); if the pair drifts more than 10% from your entry, rebalance instead of adding.",
+  modelStep(c, "Watch the pool, not just the token:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early liquidity providers — but a pool can drain through impermanent loss, so cap any single pool at $" + c.cap + " and never pair a token you would not hold alone.",
+  "To exit, remove liquidity from the pool on " + c.chain1 + " in one transaction (about " + c.gas + " in gas, ten minutes); keep the add and remove hashes, because if " + c.name + " launches a token, on-chain liquidity history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const LENDING: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC to supply and ETH to post as collateral; keep " + c.chain1 + " gas above $5.",
+  "Supply a $" + c.size + " test of USDC to one " + c.name + " market on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); supplying first, before any borrowing, shows you the real supply rate and the withdrawal speed.",
+  "If you borrow, do it against ETH collateral at under 50% loan-to-value — " + c.name + " is a lending market, so the borrow rate and the liquidation threshold are the whole trade — and never borrow the same asset you supplied.",
+  "Claim " + c.name + "'s supply interest weekly and, if the rate on " + c.chain1 + " beats the borrow cost, compound it back into the same market (about " + c.gas + " gas, five minutes); if the borrow rate jumps above the supply rate, repay first.",
+  modelStep(c, "Mind the rates weekly:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early suppliers — but lending carries liquidation and oracle risk, so cap any single market at $" + c.cap + " and keep a 2x buffer above the liquidation price.",
+  "To exit, repay any borrow first, then withdraw the supply from the market on " + c.chain1 + " in one transaction each (about " + c.gas + " gas each, ten minutes); keep the supply and repay hashes, because if " + c.name + " launches a token, on-chain supply history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const YIELD: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC; keep " + c.chain1 + " gas above $5 before you deposit.",
+  "Deposit a $" + c.size + " test into one " + c.name + " vault on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small shows the real yield, the deposit fee and the withdrawal speed before you scale it.",
+  "Pick the vault whose underlying strategy you can name in one sentence — " + c.name + " is a yield vault, so the strategy behind the vault is the whole trade — and leave the test in for at least two weeks, so the yield curve settles.",
+  "Compound weekly: claim " + c.name + "'s yield on your $" + c.size + " test and redeposit it on " + c.chain1 + " (about " + c.gas + " gas, five minutes); if the vault's yield drops below the chain's risk-free stablecoin rate for two weeks, move on.",
+  modelStep(c, "Compare the vault to the market weekly:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early vault depositors — but vaults carry strategy and smart-contract risk, so cap any single vault at $" + c.cap + " and never put a farming budget's majority in one strategy.",
+  "To exit, withdraw from the vault on " + c.chain1 + " in one transaction (about " + c.gas + " in gas, ten minutes); keep the deposit and withdrawal hashes, because if " + c.name + " launches a token, on-chain vault history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const RWA: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC; keep " + c.chain1 + " gas above $5, and expect a wallet check before the first deposit.",
+  "Deposit a $" + c.size + " test into one " + c.name + " vault on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small proves the deposit path and the redemption window before you scale it.",
+  "Read what backs the vault — " + c.name + " is a real-world-asset vault, so the off-chain asset and its custodian are the whole trade — and only deposit into a vault whose backing you can name.",
+  "Reinvest " + c.name + "'s distributions monthly rather than weekly: RWA vaults pay on a schedule, so collect each payout and redeposit it on " + c.chain1 + " (about " + c.gas + " gas, ten minutes) instead of letting it sit.",
+  modelStep(c, "Check the backing, not just the yield:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early vault depositors — but RWA vaults carry custodian and redemption risk, so cap any single vault at $" + c.cap + " and confirm the redemption window before you deposit.",
+  "To exit, request redemption from the vault on " + c.chain1 + " and wait out its window (RWA redemptions are rarely instant); keep the deposit and redemption hashes, because if " + c.name + " launches a token, on-chain vault history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const STAKING: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding the chain's native token; keep " + c.chain1 + " gas above $5.",
+  "Stake a $" + c.size + " test with one " + c.name + " pool on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small shows the real staking yield and the unstaking delay before you scale it.",
+  "Pick the pool whose validators you can name — " + c.name + " stakes the chain's token, so validator quality is the whole trade — and spread a larger position across at least two pools rather than one.",
+  "Restake " + c.name + "'s rewards weekly where the pool allows it (about " + c.gas + " gas, five minutes); if the pool's yield falls below the chain's base staking rate for two weeks, move the stake.",
+  modelStep(c, "Compare the pool to base staking weekly:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early stakers — but staking carries slashing and unbonding risk, so cap any single pool at $" + c.cap + " and check the unbonding window before you stake.",
+  "To exit, unstake from the pool on " + c.chain1 + " and wait out its unbonding window (staking exits are rarely instant); keep the stake and unstake hashes, because if " + c.name + " launches a token, on-chain staking history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const BRIDGE: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC on the source chain; keep gas above $5 on both sides of the route.",
+  "Bridge a $" + c.size + " test of USDC through one " + c.name + " route on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small proves the route, the fee and the arrival time before you move size.",
+  "Pick the route with the deepest liquidity and the shortest finality — " + c.name + " is a bridge, so the route's fee and its settlement time are the whole trade — and never bridge during a chain congestion spike.",
+  "If you bridge regularly, batch it: one larger " + c.name + " bridge a week costs less in fees than daily small ones on " + c.chain1 + " (about " + c.gas + " gas per bridge, ten minutes), and each crossing is a use of the protocol.",
+  modelStep(c, "Count crossings, not just volume:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early bridge users — but bridges carry smart-contract and finality risk, so cap any single crossing at $" + c.cap + " and never bridge more than you can afford to wait a day for.",
+  "To finish, confirm the arrival on the destination chain before you close the tab (about " + c.gas + " gas on the source chain, ten minutes); keep the bridge hashes on both chains, because if " + c.name + " launches a token, on-chain bridge history is usually the record that counts.",
+];
+
+const BASIS: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC; keep " + c.chain1 + " gas above $5 before you deposit.",
+  "Deposit a $" + c.size + " test into one " + c.name + " vault on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small shows the real basis yield and the funding-rate behaviour before you scale it.",
+  "Understand the trade first — " + c.name + " earns the basis between spot and futures, so the funding rate is the whole trade — and only deposit while funding is positive on the venues it trades.",
+  "Rebalance " + c.name + " weekly: if funding flips negative for two weeks, pull the test back to USDC on " + c.chain1 + " (about " + c.gas + " gas, ten minutes) rather than paying to hold the position.",
+  modelStep(c, "Watch funding, not just TVL:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early vault depositors — but basis vaults carry funding and counterparty risk, so cap any single vault at $" + c.cap + " and never deposit while funding is negative.",
+  "To exit, withdraw from the vault on " + c.chain1 + " in one transaction (about " + c.gas + " in gas, ten minutes); keep the deposit and withdrawal hashes, because if " + c.name + " launches a token, on-chain vault history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const OPTIONS: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC as collateral; keep " + c.chain1 + " gas above $5 before you write anything.",
+  "Post a $" + c.size + " test of USDC collateral to one " + c.name + " vault on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small shows the real premium and the settlement behaviour before you scale it.",
+  "Write only options you would hold to expiry — " + c.name + " is an options market, so the strike, the expiry and the premium are the whole trade — and never write a naked position larger than the collateral you posted.",
+  "Collect " + c.name + "'s premiums weekly and, if the vault settles in USDC, compound them back into the same vault on " + c.chain1 + " (about " + c.gas + " gas, five minutes); if implied volatility doubles from your entry, stop writing and wait.",
+  modelStep(c, "Price the premium weekly:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early options writers — but options carry assignment and volatility risk, so cap any single vault at $" + c.cap + " and never write more than the collateral you can lose.",
+  "To exit, close the position before expiry on " + c.chain1 + " in one transaction (about " + c.gas + " in gas, ten minutes); keep the open and close hashes, because if " + c.name + " launches a token, on-chain options history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const STABLE: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding ETH to lock as collateral; keep " + c.chain1 + " gas above $5 before you mint.",
+  "Mint a $" + c.size + " test of " + c.name + "'s stablecoin on " + c.chain1 + " against ETH collateral (about " + c.sizePct + " of its " + c.tvl + " TVL); minting a small amount first shows the real stability fee and the redemption path.",
+  "Keep the collateral ratio above 200% — " + c.name + " is a stablecoin system, so the collateral ratio and the stability fee are the whole trade — and never mint against a token you would not hold.",
+  "Check " + c.name + "'s peg weekly: if its stablecoin trades more than 1% off its peg for a week, repay the test on " + c.chain1 + " (about " + c.gas + " gas, ten minutes) rather than holding a depegged position.",
+  modelStep(c, "Watch the peg and the TVL:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early minters — but stablecoin systems carry depeg and liquidation risk, so cap any single mint at $" + c.cap + " and keep a 2x buffer above the liquidation ratio.",
+  "To exit, repay the minted stablecoin and unlock the collateral on " + c.chain1 + " in one transaction each (about " + c.gas + " gas each, ten minutes); keep the mint and repay hashes, because if " + c.name + " launches a token, on-chain mint history on " + c.chain1 + " is usually the record that counts.",
+];
+
+const OTHER: Steps = (c) => [
+  "Open " + c.name + " on " + c.chain1 + " — the first of its " + c.chainCount + " chains — with a wallet holding USDC; keep " + c.chain1 + " gas above $5 before you use it.",
+  "Use " + c.name + " with a $" + c.size + " test on " + c.chain1 + " (about " + c.sizePct + " of its " + c.tvl + " TVL); a test this small proves the product, the fee and the withdrawal path before you scale it.",
+  "Learn the product's core action first — " + c.name + " is a " + (c.category === "Chain" ? "blockchain network" : c.category + " protocol") + ", so the fee it charges and the asset it touches are the whole trade — and repeat that action weekly rather than once.",
+  "Repeat " + c.name + "'s core action weekly on " + c.chain1 + " (about " + c.gas + " gas each time, ten minutes); regular use is what a future launch usually rewards, not one large deposit.",
+  modelStep(c, "Use it weekly and watch the numbers:"),
+  c.name + " has run " + c.months + " with no token recorded, so a launch would reward early users — but every protocol carries smart-contract risk, so cap any single position at $" + c.cap + " and never deposit more than you can afford to lose.",
+  "To exit, unwind the position on " + c.chain1 + " in one transaction (about " + c.gas + " in gas, ten minutes); keep the deposit and withdrawal hashes, because if " + c.name + " launches a token, on-chain usage history on " + c.chain1 + " is usually the record that counts.",
+];
+
+function playbookFor(category: string | null): Steps {
+  switch (category) {
+    case "Risk Curators":
+    case "Onchain Capital Allocator":
+      return CURATOR;
+    case "Dexs":
+    case "Derivatives":
+    case "Prediction Market":
+    case "Indexes":
+      return DEX;
+    case "Lending":
+    case "Uncollateralized Lending":
+    case "Collateral Markets":
+      return LENDING;
+    case "Yield":
+    case "Yield Aggregator":
+    case "Farm":
+    case "Leveraged Farming":
+      return YIELD;
+    case "RWA":
+      return RWA;
+    case "CDP":
+    case "Stablecoin Wrapper":
+    case "Dual-Token Stablecoin":
+    case "Anchor BTC":
+    case "Decentralized BTC":
+      return STABLE;
+    case "Liquid Staking":
+    case "Liquid Restaking":
+    case "Restaking":
+    case "Staking Pool":
+      return STAKING;
+    case "Bridge":
+    case "Canonical Bridge":
+    case "Cross Chain Bridge":
+      return BRIDGE;
+    case "Basis Trading":
+    case "Liquidity Manager":
+      return BASIS;
+    case "Options":
+    case "Options Vault":
+    case "Synthetics":
+    case "Interest Rate Derivatives":
+      return OPTIONS;
+    default:
+      return OTHER;
   }
-  return "its main chain";
 }
 
-function money(amount: number): string {
-  if (amount >= 1_000_000_000) return `$${(amount / 1_000_000_000).toFixed(1)}B`;
-  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(0)}M`;
-  return `$${Math.round(amount).toLocaleString("en-US")}`;
+function fitStep(step: string): string {
+  const s = step.trim().replace(/\s+/g, " ");
+  if (s.length <= 600) return s;
+  const cut = s.slice(0, 597);
+  const lastSpace = cut.lastIndexOf(" ");
+  return cut.slice(0, lastSpace > 400 ? lastSpace : 597).trim() + "...";
 }
 
-// Farm steps: seven concrete steps per protocol, written from its category
-// and its main chain, each with what it costs and how long it takes. The
-// steps are generated, never stored, so the drawer and the board can never
-// disagree: both read the same array from the same row.
-export function farmSteps(protocol: SnapshotProtocol): string[] {
-  const name = protocol.name;
-  const chain = primaryChain(protocol);
-  const tvl = money(protocol.tvl_usd);
-  const cat = (protocol.category ?? "").toLowerCase();
-  const steps: string[] = [];
-
-  if (cat.includes("dex") || cat.includes("swap") || cat.includes("exchange")) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and swap $25 to $50 of a major asset for another one, to register as an active trader (about 5 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Add $100 to $500 of liquidity to one of ${name}'s deepest pools on ${chain} and keep the LP position open, so the protocol counts you as a liquidity provider (${tvl} TVL in total, about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `Place one more swap of at least $50 every week for the next month, varying the pair each time, so your activity reads as sustained use rather than a single visit (about 5 minutes a week).`,
-    );
-    steps.push(
-      `If ${name} offers a points or volume program, opt in before your next trade and check that your wallet shows up on its leaderboard within a day (free, about 5 minutes).`,
-    );
-    steps.push(
-      `Leave the liquidity in place for at least 30 days and collect the trading fees it earns, which on ${chain} usually run a few dollars a month per $100 provided.`,
-    );
-    steps.push(
-      `Join ${name}'s public chat or forum and vote on one governance poll or give feedback on one feature, so your address is tied to the community as well as to volume (about 10 minutes, free).`,
-    );
-    steps.push(
-      `Before any token snapshot, withdraw only half the position and keep the rest working: an address that exits everything at once often reads as a farmer, not a user (about 5 minutes plus gas).`,
-    );
-  } else if (cat.includes("lend")) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and supply $100 to $300 of a major asset as collateral, so the protocol records you as a lender (about 5 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Borrow 30 to 40 percent of your supplied value in a stable asset, keeping the health factor above 2, and hold the loan for at least two weeks (interest usually under 5 percent a year).`,
-    );
-    steps.push(
-      `Repay a quarter of the loan, then borrow it again the following week, so the position shows repeated use across more than one month (about 10 minutes a week).`,
-    );
-    steps.push(
-      `If ${name} runs a points program, confirm your supplied balance appears in it within a day and note the rate it pays per dollar supplied (free, about 5 minutes).`,
-    );
-    steps.push(
-      `Add a second supplied asset from a different chain ${name} supports, so the position is not a single-asset, single-day deposit (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `Keep the position open for at least 60 days and never let the health factor fall below 1.5, topping up collateral after any sharp market move (about 5 minutes when needed).`,
-    );
-    steps.push(
-      `Close the loan in stages near the end, repaying half first and leaving the supply earning yield until any snapshot is announced (about 10 minutes plus gas).`,
-    );
-  } else if (cat.includes("yield") || cat.includes("vault") || cat.includes("farm")) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and deposit $100 to $500 into its highest-TVL vault, accepting the vault's strategy and fee schedule first (about 10 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Hold the vault position for at least 30 days without withdrawing, since vault points and rewards usually accrue by time in the vault, not by deposit size alone.`,
-    );
-    steps.push(
-      `Add a second deposit of $50 or more in the third week, from the same wallet, so the record shows an ongoing depositor rather than a one-off deposit (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `If the vault auto-compounds, leave compounding on; if it pays out manually, claim and redeposit the rewards once a month to keep the balance growing (about 5 minutes a claim).`,
-    );
-    steps.push(
-      `Check the vault's reported yield once a week and move to a different ${name} vault only if the yield falls by more than a third for two weeks running (about 5 minutes a check).`,
-    );
-    steps.push(
-      `If ${name} tracks points, confirm your vault balance is counted within a day of depositing and keep a screenshot of the points page for your records (free, about 5 minutes).`,
-    );
-    steps.push(
-      `Withdraw in two halves when you exit, a week apart, and leave a small dust balance in the vault until any token announcement, so the address still reads as active (about 10 minutes plus gas).`,
-    );
-  } else if (cat.includes("restak") || cat.includes("staking")) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and restake $100 to $300 of a liquid staking token through its restaking flow, confirming the operator and the lock terms first (about 10 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Delegate the restaked position to an operator with a long uptime record and a commission under 10 percent, rather than the default, so the position earns the full restaking yield.`,
-    );
-    steps.push(
-      `Hold the restaked position for at least 60 days, since restaking rewards and any points accrue by time staked and early exits usually forfeit the bonus (no action needed while holding).`,
-    );
-    steps.push(
-      `Top up the position by $50 or more once a month from the same wallet, so the record shows a growing stake across several snapshots (about 10 minutes a month plus gas).`,
-    );
-    steps.push(
-      `If ${name} lets you pick which services your stake secures, opt into at least two, because a stake securing more services usually earns more than a stake securing one (about 10 minutes).`,
-    );
-    steps.push(
-      `Check the position's rewards once a week and claim them only when the claim is worth more than the gas it costs, then restake the claim (about 5 minutes a check).`,
-    );
-    steps.push(
-      `Unstake in stages if you exit, leaving half staked until any token announcement, because a full instant exit reads as mercenary rather than committed (unstaking can take days to weeks).`,
-    );
-  } else if (
-    cat.includes("deriv") ||
-    cat.includes("option") ||
-    cat.includes("synthetic") ||
-    cat.includes("perp")
-  ) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and open a small leveraged position of $50 to $100 with 2x leverage at most, so the protocol records you as a trader without risking a liquidation (about 10 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Close the position after a few days with a small profit or a small loss, then open a second one the following week, so the record shows repeated trading rather than a single trade (about 10 minutes a trade).`,
-    );
-    steps.push(
-      `Keep every position's margin above twice the maintenance level and set a stop loss on each one, because a liquidation usually erases any points the trade earned (about 5 minutes a position).`,
-    );
-    steps.push(
-      `If ${name} runs a trading competition or points season, join it before your next trade and check your volume is counted within a day (free, about 5 minutes).`,
-    );
-    steps.push(
-      `Provide $50 to $100 as margin to the protocol's vault or liquidity side as well as trading, so you count on both sides of its book (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `Trade at least once a week for a month, varying the market each time, and keep total volume under ten times your deposit so no single loss wipes the position out.`,
-    );
-    steps.push(
-      `Wind positions down gradually before any snapshot and leave the margin account funded, so the address still reads as an active trader when the snapshot is taken (about 10 minutes).`,
-    );
-  } else if (
-    cat.includes("stable") ||
-    cat.includes("cdp") ||
-    cat.includes("algo")
-  ) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and mint $50 to $200 of its stable asset against $150 to $600 of collateral, keeping the collateral ratio above 200 percent (about 10 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Hold the minted stable asset for at least 30 days instead of swapping it away at once, since holding is what the protocol's own records reward (no action needed while holding).`,
-    );
-    steps.push(
-      `Use the minted stable asset in one of ${name}'s own pools or savings modules for a week, so the same dollars count as both a mint and a use of the protocol (about 10 minutes).`,
-    );
-    steps.push(
-      `Top up the collateral by $50 or more in the third week to push the collateral ratio higher, which lowers liquidation risk and reads as a committed minter (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `If ${name} pays interest on the stable asset, claim it once a month and either hold it or convert it back into collateral (about 5 minutes a claim).`,
-    );
-    steps.push(
-      `Check the collateral ratio once a week and add collateral after any 10 percent market drop, never letting the ratio fall near the liquidation line (about 5 minutes a check).`,
-    );
-    steps.push(
-      `Repay the minted amount in two halves a week apart when you exit, keeping the collateral locked until any token announcement, so the address still reads as active (about 10 minutes plus gas).`,
-    );
-  } else if (
-    cat.includes("collateral") ||
-    cat.includes("basis") ||
-    cat.includes("liquidity manager")
-  ) {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and open a $100 to $300 position in its main product, reading the fee schedule and the exit terms before you confirm (about 10 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Hold the position for at least 30 days, because this kind of protocol rewards time in the position far more than the size of a single deposit.`,
-    );
-    steps.push(
-      `Add $50 or more to the same position in the third week, from the same wallet, so the record shows a growing position across more than one snapshot (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `If ${name} publishes a points rate, confirm your position is counted within a day and note how many points a dollar earns per day, so you can judge whether to add more (free, about 5 minutes).`,
-    );
-    steps.push(
-      `Check the position once a week and rebalance only when its range or ratio has drifted by more than a quarter, rather than churning it daily and paying gas each time (about 5 minutes a check).`,
-    );
-    steps.push(
-      `Try the position on a second chain ${name} supports with a smaller $50 amount, so the address is active on more than one chain (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `Exit in two halves a week apart when you leave, keeping a small balance working until any token announcement, so the address still reads as a live user (about 10 minutes plus gas).`,
-    );
-  } else {
-    steps.push(
-      `Connect a wallet to ${name} on ${chain} and make a first real transaction of $50 to $100 in its core product, reading the fees and the risks before you confirm (about 10 minutes, gas roughly $0.50 to $3 on ${chain}).`,
-    );
-    steps.push(
-      `Repeat the same action once a week for the next month, from the same wallet, so the protocol's records show a returning user rather than a single visit (about 10 minutes a week).`,
-    );
-    steps.push(
-      `Hold the resulting position for at least 30 days, since most protocols weight time in the product more heavily than the size of one transaction.`,
-    );
-    steps.push(
-      `If ${name} runs a points program, opt in before your second transaction and confirm your activity is counted within a day (free, about 5 minutes).`,
-    );
-    steps.push(
-      `Put $50 or more into a second feature of ${name} — a different pool, vault or market — so the address is active in more than one place (about 10 minutes plus gas).`,
-    );
-    steps.push(
-      `Join ${name}'s public chat or forum and answer one question or vote on one poll, tying the wallet to the community as well as to on-chain use (about 10 minutes, free).`,
-    );
-    steps.push(
-      `Wind the position down in two halves a week apart when you exit, leaving a small balance until any token announcement, so the address still reads as active (about 10 minutes plus gas).`,
-    );
-  }
-  return steps.slice(0, 7);
+export function buildFarmPlan(row: BoardRow): string[] {
+  const ctx = planContext(row);
+  return playbookFor(row.category)(ctx).map(fitStep);
 }
 
-// Pick the board: every watchlist protocol, plus the pre-token protocols
-// below the floor with the most TVL, up to targetRows rows. The extra rows
-// sit below the floor on purpose: the watchlist is the radar's headline,
-// the protocols under it are the early ones it exists to find. When the
-// snapshot holds fewer pre-token protocols below the floor than the
-// target, the remaining rows go to the largest protocols below the floor
-// that already have a token, so the board still reaches its size — those
-// rows are flagged has_token and the page separates them on its own tab.
-// The returned rows are ranked by implied value, highest first, with ties
-// broken by TVL and then by slug, so the ranking is fully deterministic.
-export function selectBoard(
-  snapshot: Snapshot,
-  targetRows: number,
-): ScoredProtocol[] {
+// ---------------------------------------------------------------- board
+
+export function buildBoard(snapshot: Snapshot): BoardRow[] {
   const asOf = snapshot.as_of;
-  const watchlist = new Set(snapshot.watchlist);
-  const bySlug = new Map(snapshot.protocols.map((p) => [p.slug, p]));
-
-  const picked: SnapshotProtocol[] = [];
-  for (const slug of snapshot.watchlist) {
-    const protocol = bySlug.get(slug);
-    if (protocol !== undefined) picked.push(protocol);
-  }
-  const pickedSlugs = new Set(picked.map((p) => p.slug));
-
-  const belowFloor = snapshot.protocols
-    .filter((p) => !pickedSlugs.has(p.slug) && p.tvl_usd < snapshot.floor_usd)
+  const watch = new Set(snapshot.watchlist);
+  const watchRows = snapshot.protocols.filter((p) => watch.has(p.slug) && isPreToken(p));
+  const subFloor = snapshot.protocols
+    .filter((p) => isPreToken(p) && !watch.has(p.slug) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1));
-  const preToken = belowFloor.filter((p) => !hasToken(p));
-  const live = belowFloor.filter((p) => hasToken(p));
-  for (const protocol of preToken) {
-    if (picked.length >= targetRows) break;
-    picked.push(protocol);
-    pickedSlugs.add(protocol.slug);
-  }
-  for (const protocol of live) {
-    if (picked.length >= targetRows) break;
-    picked.push(protocol);
-  }
-
-  const scored: ScoredProtocol[] = picked.map((p) => {
-    const factors = scoreFactors(p, asOf);
-    return {
+  const picked = [...watchRows, ...subFloor.slice(0, BOARD_ROWS - watchRows.length)];
+  const ranked = picked
+    .map((p) => ({ p, value: impliedValue(p, asOf) }))
+    .sort((a, b) => b.value - a.value || (a.p.slug < b.p.slug ? -1 : 1));
+  return ranked.map(({ p, value }, i) => {
+    const row: BoardRow = {
       slug: p.slug,
       name: p.name,
-      category: p.category,
+      category: p.category ?? "Uncategorised",
       chains: p.chains,
       tvl_usd: p.tvl_usd,
       change_7d: p.change_7d,
       listed_at: p.listed_at,
-      has_token: hasToken(p),
-      on_watchlist: watchlist.has(p.slug),
-      implied_value_usd: impliedValue(p, asOf),
-      factors,
-      farm_steps: farmSteps(p),
+      watchlist: watch.has(p.slug),
+      rank: i + 1,
+      implied_value_usd: value,
+      factors: computeFactors(p, asOf),
+      farm_steps: [],
     };
+    row.farm_steps = buildFarmPlan(row);
+    return row;
   });
+}
 
-  scored.sort(
-    (a, b) =>
-      b.implied_value_usd - a.implied_value_usd ||
-      b.tvl_usd - a.tvl_usd ||
-      (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0),
-  );
-  return scored;
+// Category leaders outside the curator cluster, for the dashboard's
+// diversity strip: the top protocol of each of the strongest non-curator
+// categories, so the page surfaces more than vault curators.
+export function diversityLeaders(rows: BoardRow[]): BoardRow[] {
+  const skip = new Set(["Risk Curators", "Onchain Capital Allocator"]);
+  const best = new Map<string, BoardRow>();
+  for (const r of rows) {
+    if (skip.has(r.category)) continue;
+    const cur = best.get(r.category);
+    if (!cur || r.implied_value_usd > cur.implied_value_usd) best.set(r.category, r);
+  }
+  return [...best.values()]
+    .sort((a, b) => b.implied_value_usd - a.implied_value_usd)
+    .slice(0, 8);
+}
+
+// The live tab: token-bearing protocols, biggest TVL first, for contrast
+// with the pre-token board.
+export function liveList(snapshot: Snapshot, count: number): SnapshotProtocol[] {
+  return snapshot.protocols
+    .filter((p) => !isPreToken(p))
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1))
+    .slice(0, count);
 }
