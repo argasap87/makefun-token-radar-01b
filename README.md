@@ -1,57 +1,46 @@
-# Token Radar — radar-4
+# Limber Equinox — Token Launch Radar (radar-5)
 
-Which pre-token protocol launches biggest? A radar over DeFiLlama's public
-protocol list, ranked by an implied launch value that is a plain function of
-the snapshot — no protocol is placed by name.
+A token launch radar for make.fun's token-radar-01 bounty ($1,325, deadline 14 Dec 2026).
 
-## Model (unchanged since radar-3)
+## What it does
 
-    implied = TVL × categoryMultiple × momentum × age × early × breadth
+`main.ts` reads the sealed DeFiLlama snapshot (`/input/snapshot.json`), ranks every
+launch candidate — a protocol that records no token and is not a versioned, wrapped,
+staked or bridged product of a protocol whose token already trades, nor an exchange —
+by its peer-calibrated implied value, and writes the board, the dashboard data, the
+dashboard, the screenshots and the dossier into the output directory.
 
-- **categoryMultiple**: Options / Synthetics 0.40; Collateral Markets,
-  Basis Trading, Farm, Liquidity Manager 0.35; every other category 0.30.
-- **momentum**: 1 + 7-day TVL change, clamped to −50…+100%.
-- **age**: 1 + 0.15 × years running, capped at 4 years.
-- **early**: 1 + 0.5 × e^(−years / 1.5) — younger protocols score higher,
-  because a launch is more of the story.
-- **breadth**: 1 + 0.05 × chains, capped at 8.
+## The model (lib/model.ts)
 
-## Board
+```
+implied value = TVL x peer multiple x growth x age
+```
 
-226 rows: the 40 watchlist protocols, plus the pre-token protocols below
-the $50M floor with the most TVL. A protocol counts as pre-token when the
-snapshot records no token for it (`gecko_id` and `symbol` both empty) —
-never "has none", only "records no token". This run's top 5: Steakhouse
-Financial, Gauntlet, Veda, USDD, Upshift.
+- **Peer multiple**: the median market-cap / TVL of the tokened protocols in the
+  same category, computed at run time from the snapshot. A category with fewer
+  than 3 tokened peers falls back to the market-wide median (0.2138 on this
+  snapshot). Multiples are clamped to 0.02–2.00. No protocol name is hardcoded.
+- **Growth**: the protocol's 7-day TVL change, mapped to a 0.80–1.40 factor.
+- **Age**: +10% per year the protocol has run with no token recorded, capped at +20%.
 
-## Farm plans (radar-4)
+On the 2026-11-14 snapshot this gives 198 launch candidates, the house watchlist
+covered 40/40, topped by Steakhouse Financial at about $669M implied value.
 
-Each row carries a 7-step farm plan built from that protocol's own record —
-its name, category, chains, TVL, 7-day change, age and rank. Ten playbooks
-cover the category families (curators, exchanges, lending, yield, RWA,
-staking, bridges, basis, options, everything else), and every step quotes
-the row's own numbers: a test deposit sized to its TVL, gas on its first
-chain, its rank and implied value with all five factors shown, and a cap
-per position. No step is shared between two rows.
+## The dashboard
 
-## Dashboard
+`dashboard/` is a static page (no network): a sortable, filterable board of 15 rows
+per page, a detail view for every protocol with its value breakdown and seven
+concrete farm steps (each priced in gas and timed), a diversity strip, and the full
+peer-multiples table the model used.
 
-`dashboard/` is a dependency-free page over `data.js`: a sortable,
-filterable table (search, category and chain filters, watchlist toggle,
-pre-token / already-live tabs), a detail drawer per protocol showing all
-five model factors and the identical 7-step farm plan, and a
-category-diversity strip — the strongest protocol in each of the strongest
-non-curator categories — because the top of the board is vault-curator
-heavy. The strip does not change the model; it only surfaces breadth.
+## Run it
 
-Deep links: `#p=<slug>` opens a protocol's drawer,
-`#category=<name>` filters to a category.
+```
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <path to snapshot.json>
+```
 
-## Run
+Two runs on the same snapshot write the same bytes.
 
-    MAKEFUN_OUTPUT_DIR=out node main.ts --input <kit>/input/snapshot.json
+## License
 
-Reads `/input/snapshot.json`, writes `/output/board.json`, `data.js`,
-`dashboard/`, `screenshots/` and `dossier.json`. The program is
-deterministic: running it twice writes byte-identical board.json, data.js
-and dossier.json.
+MIT — see LICENSE.

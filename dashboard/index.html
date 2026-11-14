@@ -1,65 +1,84 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — which pre-token protocol launches biggest</title>
+<title>Limber Equinox — Token Launch Radar</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header class="top">
-  <div class="title">
-    <h1>Token Radar</h1>
-    <p class="sub">226 pre-token protocols, ranked by implied launch value. TVL &times; category multiple &times; momentum &times; age &times; early &times; breadth — nothing ranked by name.</p>
+  <div class="brand">
+    <div class="mark">LE</div>
+    <div>
+      <h1>Limber Equinox</h1>
+      <p class="tag">Token Launch Radar — pre-token protocols, ranked by peer-calibrated implied value</p>
+    </div>
   </div>
-  <div class="meta" id="meta">Loading…</div>
+  <p class="meta" id="metaLine">Loading the sealed snapshot…</p>
 </header>
 
-<section class="strip" id="strip" aria-label="Leaders outside the curator cluster">
-  <div class="strip-label">Beyond the curators — leaders in other categories</div>
-  <div class="strip-chips" id="strip-chips"></div>
-  <p class="strip-note">The top of the board is vault-curator heavy, so this strip surfaces the strongest protocol in each of the other categories. The model is unchanged: curators simply hold the most TVL.</p>
+<section class="method">
+  <h2>How the value is worked out</h2>
+  <p><strong>Implied value = TVL × peer multiple × growth × age.</strong>
+  The peer multiple is the median market-cap / TVL of the tokened protocols in the same category
+  (at least 3 peers, otherwise the market-wide median <span id="globalMedian">…</span>),
+  clamped to 0.02–2.00. Growth reads the 7-day TVL change; age reads how long the protocol has
+  run with no token recorded. Nothing here is a hardcoded list of names — every number comes
+  from the snapshot itself, so the same program ranks a snapshot taken next month.</p>
+  <p class="caveat">“Records no token” is what the snapshot says — it is not proof a protocol has none.
+  Implied values are this radar’s own claim, never a price and never a promise.</p>
 </section>
 
 <section class="controls">
-  <input id="search" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
-  <select id="category" aria-label="Filter by category"><option value="">All categories</option></select>
-  <select id="chain" aria-label="Filter by chain"><option value="">All chains</option></select>
-  <label class="watch"><input id="watchonly" type="checkbox"> Watchlist only</label>
-  <div class="tabs" role="tablist">
-    <button id="tab-pre" role="tab" aria-selected="true">Pre-token board</button>
-    <button id="tab-live" role="tab" aria-selected="false">Already live</button>
-  </div>
+  <input id="q" type="search" placeholder="Search a protocol…" aria-label="Search protocols">
+  <select id="cat" aria-label="Filter by category"></select>
+  <select id="sort" aria-label="Sort the board">
+    <option value="value">Sort: implied value</option>
+    <option value="tvl">Sort: TVL</option>
+    <option value="growth">Sort: 7-day growth</option>
+    <option value="age">Sort: longest listed</option>
+  </select>
+  <label class="check"><input id="wl" type="checkbox"> Watchlist only</label>
 </section>
+
+<section class="diversity" id="diversity" aria-label="Board mix by category"></section>
 
 <main>
   <table id="board">
     <thead>
       <tr>
-        <th data-sort="rank">#</th>
-        <th data-sort="name">Protocol</th>
-        <th data-sort="category">Category</th>
-        <th>Chains</th>
-        <th data-sort="tvl_usd">TVL</th>
-        <th data-sort="change_7d">7d</th>
-        <th data-sort="implied_value_usd">Implied value</th>
+        <th>#</th><th>Protocol</th><th>Category</th><th>Chains</th>
+        <th class="num">TVL</th><th class="num">7d</th><th class="num">Peer ×</th>
+        <th class="num">Implied value</th><th></th>
       </tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
-  <p class="count" id="count"></p>
-  <p class="live-note" id="live-note" hidden>These protocols already have a token trading. They are here for contrast: the board above ranks what has <strong>not</strong> launched yet. A live protocol can still grow, but it cannot have a first launch.</p>
+  <div class="pager">
+    <button id="prev" type="button">← Prev 15</button>
+    <span id="pageInfo"></span>
+    <button id="next" type="button">Next 15 →</button>
+  </div>
 </main>
 
-<aside class="drawer" id="drawer" hidden>
-  <button class="close" id="drawer-close" aria-label="Close details">×</button>
-  <div id="drawer-body"></div>
-</aside>
+<section id="detail" class="detail" hidden></section>
+
+<section class="model">
+  <h2>Peer multiples used on this board</h2>
+  <p>Median market-cap / TVL of the tokened protocols in each category, taken from the same snapshot.
+  “Market median” marks a category with fewer than 3 tokened peers, where the market-wide median is used instead.</p>
+  <table id="multiples">
+    <thead><tr><th>Category</th><th class="num">Tokened peers</th><th class="num">Multiple</th><th>Source</th></tr></thead>
+    <tbody id="multRows"></tbody>
+  </table>
+</section>
 
 <footer>
-  <p>Model: implied = TVL &times; category multiple (Options/Synthetics 0.40; Collateral Markets, Basis Trading, Farm, Liquidity Manager 0.35; all else 0.30) &times; momentum (1 + 7d change clamped −50…+100%) &times; age (1 + 0.15 &times; years, capped 4) &times; early (1 + 0.5 &times; e<sup>−years/1.5</sup>) &times; breadth (1 + 0.05 &times; chains, capped 8). Data: DeFiLlama public API, snapshot as of the date shown. Farm plans are per-protocol: each step uses that protocol's own TVL, chains, age, change and rank. Nothing here is financial advice.</p>
+  <p>Built from the sealed DeFiLlama snapshot of <span id="asOf">…</span> — 758 protocols at or above $5M TVL,
+  40 on the house watchlist, <span id="rowCount">…</span> launch candidates ranked here.
+  Do your own research; farming costs gas and time, and a launch may never come.</p>
 </footer>
-
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

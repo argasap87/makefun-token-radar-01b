@@ -1,197 +1,213 @@
-// Token Radar dashboard — renders the board from window.RADAR (data.js).
-// No network, no dependencies. Sorting, filtering and the detail drawer
-// all run client-side over the shipped rows.
-
+// Limber Equinox dashboard: renders the board window.LIMBER_DATA carries.
+// Board, detail view and filters are all driven by that data — no network,
+// no hardcoded rows. Hash routes: #detail/<slug>, #filter/<category>,
+// #watchlist (watchlist-only view).
 (function () {
-  var D = window.RADAR;
-  if (!D || !D.rows) {
-    document.getElementById("meta").textContent = "data.js failed to load";
-    return;
-  }
-  var rows = D.rows;
-  var live = D.live || [];
+  "use strict";
+  var D = window.LIMBER_DATA;
+  var PAGE = 15;
 
-  var $ = function (id) { return document.getElementById(id); };
-  var fmtUsd = function (v) {
-    if (v >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B";
-    if (v >= 1e6) return "$" + (v / 1e6).toFixed(1) + "M";
-    if (v >= 1e3) return "$" + (v / 1e3).toFixed(1) + "K";
-    return "$" + Math.round(v);
-  };
-  var fmtPct = function (v) {
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function money(n) {
+    if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "K";
+    return "$" + Math.round(n);
+  }
+  function pct(v) {
     if (v == null) return "—";
-    var s = Math.abs(v) < 10 ? v.toFixed(1) : v.toFixed(0);
-    return (v > 0 ? "+" : "") + s + "%";
-  };
-  var esc = function (s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  };
-
-  // ---- header meta
-  $("meta").innerHTML =
-    "<b>" + rows.length + "</b> pre-token protocols · snapshot <b>" + esc(D.as_of) + "</b><br>" +
-    "watchlist <b>40/40</b> · model <b>" + esc(D.model) + "</b>";
-
-  // ---- diversity strip: best protocol per category, outside the curator cluster
-  var skip = { "Risk Curators": 1, "Onchain Capital Allocator": 1 };
-  var best = {};
-  rows.forEach(function (r) {
-    if (skip[r.category]) return;
-    if (!best[r.category] || r.implied_value_usd > best[r.category].implied_value_usd) best[r.category] = r;
-  });
-  var leaders = Object.keys(best).map(function (k) { return best[k]; })
-    .sort(function (a, b) { return b.implied_value_usd - a.implied_value_usd; })
-    .slice(0, 8);
-  $("strip-chips").innerHTML = leaders.map(function (r) {
-    return '<button class="chip" data-category="' + esc(r.category) + '" title="Filter to ' + esc(r.category) + '">' +
-      "<b>#" + r.rank + " " + esc(r.name) + "</b> <span class=\"cat\">" + esc(r.category) + " · " + fmtUsd(r.implied_value_usd) + "</span></button>";
-  }).join("");
-  $("strip-chips").addEventListener("click", function (e) {
-    var chip = e.target.closest(".chip");
-    if (!chip) return;
-    setCategory(chip.getAttribute("data-category"));
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  });
-
-  // ---- filter controls
-  var cats = {};
-  rows.forEach(function (r) { cats[r.category] = 1; });
-  Object.keys(cats).sort().forEach(function (c) {
-    var o = document.createElement("option");
-    o.value = c; o.textContent = c;
-    $("category").appendChild(o);
-  });
-  var chains = {};
-  rows.forEach(function (r) { r.chains.forEach(function (ch) { chains[ch] = 1; }); });
-  Object.keys(chains).sort().forEach(function (ch) {
-    var o = document.createElement("option");
-    o.value = ch; o.textContent = ch;
-    $("chain").appendChild(o);
-  });
-
-  // ---- state
-  var state = { tab: "pre", q: "", category: "", chain: "", watchOnly: false, sort: "rank", dir: 1 };
-
-  function setCategory(c) {
-    state.category = c;
-    $("category").value = c;
-    render();
+    var s = (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+    return '<span class="' + (v > 0 ? "up" : v < 0 ? "down" : "") + '">' + s + "</span>";
   }
+  function ageYears(listedAt) {
+    if (!listedAt) return null;
+    var days = (new Date(D.as_of + "T00:00:00Z") - new Date(listedAt + "T00:00:00Z")) / 86400000;
+    if (!(days > 0)) return null;
+    return days / 365;
+  }
+
+  var state = { q: "", cat: "All", wl: false, sort: "value", page: 0, sel: null };
 
   function filtered() {
-    var list = state.tab === "pre" ? rows : live;
-    var q = state.q.trim().toLowerCase();
-    return list.filter(function (r) {
-      if (q && r.name.toLowerCase().indexOf(q) < 0 && r.slug.toLowerCase().indexOf(q) < 0) return false;
-      if (state.category && r.category !== state.category) return false;
-      if (state.chain && r.chains.indexOf(state.chain) < 0) return false;
-      if (state.watchOnly && !r.watchlist) return false;
+    var rows = D.rows.filter(function (r) {
+      if (state.wl && !r.watchlist) return false;
+      if (state.cat !== "All" && r.category !== state.cat) return false;
+      if (state.q) {
+        var q = state.q.toLowerCase();
+        if (r.name.toLowerCase().indexOf(q) < 0 && r.slug.indexOf(q) < 0) return false;
+      }
       return true;
     });
-  }
-
-  function sorted(list) {
-    var k = state.sort;
-    var dir = state.dir;
-    return list.slice().sort(function (a, b) {
-      var av = a[k], bv = b[k];
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      if (typeof av === "string") return dir * (av < bv ? -1 : av > bv ? 1 : 0);
-      return dir * (av - bv);
+    if (state.sort === "tvl") rows.sort(function (a, b) { return b.tvl_usd - a.tvl_usd; });
+    else if (state.sort === "growth") rows.sort(function (a, b) { return (b.change_7d || 0) - (a.change_7d || 0); });
+    else if (state.sort === "age") rows.sort(function (a, b) {
+      var ya = ageYears(a.listed_at), yb = ageYears(b.listed_at);
+      if (ya == null && yb == null) return 0;
+      if (ya == null) return 1;
+      if (yb == null) return -1;
+      return yb - ya;
     });
+    else rows.sort(function (a, b) { return a.rank - b.rank; });
+    return rows;
   }
 
-  function render() {
-    var list = sorted(filtered());
-    var tbody = $("rows");
-    tbody.innerHTML = list.map(function (r) {
-      var chg = r.change_7d == null ? "—" : '<span class="' + (r.change_7d >= 0 ? "up" : "down") + '">' + fmtPct(r.change_7d) + "</span>";
-      var implied = state.tab === "pre"
-        ? '<span class="implied">' + fmtUsd(r.implied_value_usd) + "</span>"
-        : '<span class="implied">' + fmtUsd(r.tvl_usd) + "</span>";
-      var rank = state.tab === "pre" ? r.rank : "—";
-      var star = r.watchlist ? ' <span class="star" title="Watchlist">★</span>' : "";
-      return '<tr data-slug="' + esc(r.slug) + '"><td>' + rank + "</td>" +
-        '<td><span class="name">' + esc(r.name) + "</span>" + star + ' <span class="slug">' + esc(r.slug) + "</span></td>" +
-        "<td>" + esc(r.category) + "</td>" +
-        "<td>" + esc(r.chains.slice(0, 3).join(", ")) + (r.chains.length > 3 ? " +" + (r.chains.length - 3) : "") + "</td>" +
-        '<td class="num">' + fmtUsd(r.tvl_usd) + "</td>" +
-        '<td class="num">' + chg + "</td>" +
-        '<td class="num">' + implied + "</td></tr>";
+  function renderBoard() {
+    var rows = filtered();
+    var pages = Math.max(1, Math.ceil(rows.length / PAGE));
+    if (state.page >= pages) state.page = pages - 1;
+    if (state.page < 0) state.page = 0;
+    var slice = rows.slice(state.page * PAGE, state.page * PAGE + PAGE);
+    $("rows").innerHTML = slice.map(function (r) {
+      return "<tr data-slug=\"" + esc(r.slug) + "\" class=\"" + (state.sel === r.slug ? "sel" : "") + "\">" +
+        "<td class=\"rank\">" + r.rank + "</td>" +
+        "<td class=\"name\">" + esc(r.name) + (r.watchlist ? " <span class=\"star\" title=\"On the house watchlist\">★</span>" : "") + "</td>" +
+        "<td class=\"cat\">" + esc(r.category) + "</td>" +
+        "<td class=\"cat\">" + esc(r.chains.slice(0, 2).join(", ")) + (r.chains.length > 2 ? " +" + (r.chains.length - 2) : "") + "</td>" +
+        "<td class=\"num\">" + money(r.tvl_usd) + "</td>" +
+        "<td class=\"num\">" + pct(r.change_7d) + "</td>" +
+        "<td class=\"num\">" + r.multiple.toFixed(2) + (r.multiple_fallback ? "*" : "") + "</td>" +
+        "<td class=\"num val\">" + money(r.implied_value_usd) + "</td>" +
+        "<td><button type=\"button\" data-detail=\"" + esc(r.slug) + "\">Farm →</button></td>" +
+        "</tr>";
     }).join("");
-    $("count").textContent = list.length + " of " + (state.tab === "pre" ? rows.length : live.length) +
-      (state.tab === "pre" ? " pre-token protocols" : " live protocols") + " shown";
-    $("live-note").hidden = state.tab !== "live";
-    document.querySelectorAll("#board th").forEach(function (th) {
-      var k = th.getAttribute("data-sort");
-      if (k) th.textContent = th.textContent.replace(/ [▲▼]$/, "") + (k === state.sort ? (state.dir === 1 ? " ▲" : " ▼") : "");
+    $("pageInfo").textContent = "Page " + (state.page + 1) + " of " + pages + " · " + rows.length + " rows · 15 per page";
+    $("prev").disabled = state.page === 0;
+    $("next").disabled = state.page >= pages - 1;
+  }
+
+  function renderDiversity() {
+    $("diversity").innerHTML = D.diversity.map(function (d) {
+      return "<span class=\"chip" + (state.cat === d.category ? " on" : "") + "\" data-cat=\"" + esc(d.category) + "\">" +
+        esc(d.category) + " <b>" + d.count + "</b></span>";
+    }).join("");
+  }
+
+  function renderDetail() {
+    var box = $("detail");
+    if (!state.sel) { box.hidden = true; box.innerHTML = ""; return; }
+    var r = null;
+    for (var i = 0; i < D.rows.length; i++) if (D.rows[i].slug === state.sel) { r = D.rows[i]; break; }
+    if (!r) { box.hidden = true; return; }
+    var multNote = r.multiple_fallback
+      ? "market median — fewer than 3 tokened peers in " + esc(r.category)
+      : "median of " + r.peers + " tokened " + esc(r.category) + " peers";
+    box.hidden = false;
+    box.innerHTML =
+      "<button type=\"button\" class=\"close\" id=\"closeDetail\">Close ✕</button>" +
+      "<h2>#" + r.rank + " " + esc(r.name) + (r.watchlist ? " <span class=\"star\">★ watchlist</span>" : "") + "</h2>" +
+      "<p class=\"sub\">" + esc(r.category) + " · " + esc(r.chains.join(", ")) +
+      (r.listed_at ? " · tracked since " + esc(r.listed_at) : " · listing date unreported") +
+      " · records no token</p>" +
+      "<div class=\"breakdown\">" +
+      "<div class=\"cell\"><div class=\"k\">TVL</div><div class=\"v\">" + money(r.tvl_usd) + "</div></div>" +
+      "<div class=\"cell\"><div class=\"k\">Peer multiple</div><div class=\"v\">" + r.multiple.toFixed(3) + "×</div></div>" +
+      "<div class=\"cell\"><div class=\"k\">Growth ×</div><div class=\"v\">" + r.growth_factor.toFixed(3) + "</div></div>" +
+      "<div class=\"cell\"><div class=\"k\">Age ×</div><div class=\"v\">" + r.age_factor.toFixed(3) + "</div></div>" +
+      "<div class=\"cell\"><div class=\"k\">Implied value</div><div class=\"v gold\">" + money(r.implied_value_usd) + "</div></div>" +
+      "</div>" +
+      "<p class=\"formula\">" + money(r.tvl_usd) + " TVL × " + r.multiple.toFixed(3) + " peer multiple (" + multNote + ") × " +
+      r.growth_factor.toFixed(3) + " growth (" + (r.change_7d == null ? "7d change unreported" : (r.change_7d > 0 ? "+" : "") + r.change_7d.toFixed(1) + "% in 7 days") + ") × " +
+      r.age_factor.toFixed(3) + " age = <strong>" + money(r.implied_value_usd) + "</strong></p>" +
+      "<h3>How to farm it</h3><ol>" +
+      r.farm_steps.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") +
+      "</ol>";
+    $("closeDetail").addEventListener("click", function () {
+      state.sel = null;
+      if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search);
+      renderBoard(); renderDetail();
     });
-    $("tab-pre").setAttribute("aria-selected", state.tab === "pre" ? "true" : "false");
-    $("tab-live").setAttribute("aria-selected", state.tab === "live" ? "true" : "false");
   }
 
-  // ---- events
-  $("search").addEventListener("input", function (e) { state.q = e.target.value; render(); });
-  $("category").addEventListener("change", function (e) { state.category = e.target.value; render(); });
-  $("chain").addEventListener("change", function (e) { state.chain = e.target.value; render(); });
-  $("watchonly").addEventListener("change", function (e) { state.watchOnly = e.target.checked; render(); });
-  $("tab-pre").addEventListener("click", function () { state.tab = "pre"; render(); });
-  $("tab-live").addEventListener("click", function () { state.tab = "live"; render(); });
-  document.querySelectorAll("#board th[data-sort]").forEach(function (th) {
-    th.addEventListener("click", function () {
-      var k = th.getAttribute("data-sort");
-      if (state.sort === k) state.dir = -state.dir;
-      else { state.sort = k; state.dir = k === "name" || k === "category" ? 1 : -1; }
-      render();
-    });
-  });
-
-  // ---- detail drawer
-  function openDrawer(slug) {
-    var r = rows.filter(function (x) { return x.slug === slug; })[0];
-    if (!r) return;
-    var f = r.factors;
-    var body = "<h2>" + esc(r.name) + (r.watchlist ? ' <span class="star">★</span>' : "") + "</h2>" +
-      '<p class="dsub">Rank #' + r.rank + " · " + esc(r.category) + " · " + esc(r.chains.join(", ")) +
-      " · TVL " + fmtUsd(r.tvl_usd) + " · 7d " + fmtPct(r.change_7d) + "</p>" +
-      "<h3>Value model</h3>" +
-      '<table class="factors">' +
-      "<tr><td>TVL</td><td>" + fmtUsd(r.tvl_usd) + "</td></tr>" +
-      "<tr><td>Category multiple (" + esc(r.category) + ")</td><td>" + f.categoryMultiple.toFixed(2) + "×</td></tr>" +
-      "<tr><td>Momentum (7d " + fmtPct(r.change_7d) + ")</td><td>" + f.momentum.toFixed(2) + "×</td></tr>" +
-      "<tr><td>Age (" + (f.years * 12).toFixed(0) + " months running)</td><td>" + f.age.toFixed(2) + "×</td></tr>" +
-      "<tr><td>Early (no token yet)</td><td>" + f.early.toFixed(2) + "×</td></tr>" +
-      "<tr><td>Breadth (" + r.chains.length + " chains)</td><td>" + f.breadth.toFixed(2) + "×</td></tr>" +
-      '<tr class="total"><td>Implied launch value</td><td>' + fmtUsd(r.implied_value_usd) + "</td></tr>" +
-      "</table>" +
-      "<h3>Farm plan — 7 steps for this protocol</h3>" +
-      '<ol class="plan">' + r.farm_steps.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ol>";
-    $("drawer-body").innerHTML = body;
-    $("drawer").hidden = false;
-    if (history.replaceState) history.replaceState(null, "", "#p=" + encodeURIComponent(slug));
+  function renderMultiples() {
+    $("multRows").innerHTML = D.multiples.map(function (m) {
+      return "<tr><td>" + esc(m.category) + "</td><td class=\"num\">" + m.peers + "</td>" +
+        "<td class=\"num val\">" + m.multiple.toFixed(4) + "×</td>" +
+        "<td class=\"cat\">" + (m.fallback ? "Market median" : "Category peers") + "</td></tr>";
+    }).join("");
   }
-  function closeDrawer() {
-    $("drawer").hidden = true;
-    if (history.replaceState) history.replaceState(null, "", location.pathname + location.search);
-  }
-  $("rows").addEventListener("click", function (e) {
-    var tr = e.target.closest("tr");
-    if (tr) openDrawer(tr.getAttribute("data-slug"));
-  });
-  $("drawer-close").addEventListener("click", closeDrawer);
 
-  // ---- deep links: #p=<slug> opens the drawer, #category=<name> filters
   function applyHash() {
-    var h = location.hash.slice(1);
-    var params = new URLSearchParams(h);
-    var p = params.get("p");
-    var cat = params.get("category");
-    if (cat) setCategory(cat);
-    if (p) openDrawer(p);
+    var h = window.location.hash || "";
+    // A new hash replaces the whole view: clear the previous selection,
+    // filter and watchlist flag first, then set what the hash names.
+    state.sel = null; state.cat = "All"; state.wl = false; state.scrollBoard = false;
+    if (h.indexOf("#detail/") === 0) {
+      state.sel = decodeURIComponent(h.slice(8));
+    } else if (h.indexOf("#filter/") === 0) {
+      state.cat = decodeURIComponent(h.slice(8));
+    } else if (h === "#watchlist") {
+      state.wl = true;
+    } else if (h === "#board") {
+      state.scrollBoard = true;
+    }
+    var sel = $("cat");
+    if (sel) sel.value = state.cat;
+    var cb = $("wl");
+    if (cb) cb.checked = state.wl;
+    state.page = 0;
   }
 
-  render();
+  // Deep links land on their view: a #detail/ link opens the detail panel in
+  // view, #board puts the board's 15 rows in view. Instant scroll so a
+  // screenshot taken on load sees the target, not the top of the page.
+  function scrollToHash() {
+    if (state.sel) {
+      var det = $("detail");
+      if (det && !det.hidden) det.scrollIntoView({ behavior: "auto", block: "start" });
+    } else if (state.scrollBoard) {
+      var main = document.querySelector("main");
+      if (main) main.scrollIntoView({ behavior: "auto", block: "start" });
+    }
+  }
+
+  function renderAll() {
+    renderDiversity(); renderBoard(); renderDetail();
+  }
+
+  // Static chrome.
+  $("metaLine").textContent = "Snapshot " + D.as_of + " · " + D.snapshot_protocols +
+    " protocols at $5M+ TVL · " + D.watchlist_count + " on the house watchlist · " +
+    D.rows.length + " launch candidates ranked · ★ = watchlist";
+  $("globalMedian").textContent = D.global_median_multiple.toFixed(4);
+  $("asOf").textContent = D.as_of;
+  $("rowCount").textContent = D.rows.length;
+  var catSel = $("cat");
+  catSel.innerHTML = "<option value=\"All\">All categories</option>" +
+    D.diversity.map(function (d) { return "<option value=\"" + esc(d.category) + "\">" + esc(d.category) + " (" + d.count + ")</option>"; }).join("");
+  renderMultiples();
+
+  // Events.
+  $("q").addEventListener("input", function (e) { state.q = e.target.value; state.page = 0; renderBoard(); });
+  catSel.addEventListener("change", function (e) { state.cat = e.target.value; state.page = 0; renderAll(); });
+  $("sort").addEventListener("change", function (e) { state.sort = e.target.value; state.page = 0; renderBoard(); });
+  $("wl").addEventListener("change", function (e) { state.wl = e.target.checked; state.page = 0; renderBoard(); });
+  $("prev").addEventListener("click", function () { state.page--; renderBoard(); });
+  $("next").addEventListener("click", function () { state.page++; renderBoard(); });
+  $("diversity").addEventListener("click", function (e) {
+    var chip = e.target.closest("[data-cat]");
+    if (!chip) return;
+    state.cat = state.cat === chip.getAttribute("data-cat") ? "All" : chip.getAttribute("data-cat");
+    catSel.value = state.cat;
+    state.page = 0; renderAll();
+  });
+  $("rows").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-detail]");
+    var tr = e.target.closest("tr[data-slug]");
+    var slug = btn ? btn.getAttribute("data-detail") : tr ? tr.getAttribute("data-slug") : null;
+    if (!slug) return;
+    state.sel = slug;
+    history.replaceState(null, "", "#detail/" + encodeURIComponent(slug));
+    renderBoard(); renderDetail();
+    $("detail").scrollIntoView({ behavior: "auto", block: "start" });
+  });
+  window.addEventListener("hashchange", function () { applyHash(); renderAll(); scrollToHash(); });
+
   applyHash();
+  renderAll();
+  scrollToHash();
 })();
