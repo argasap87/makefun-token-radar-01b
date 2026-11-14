@@ -1,46 +1,31 @@
-# Limber Equinox — Token Launch Radar (radar-5)
+# Limber Meridian — Token Launch Radar (radar-6)
 
-A token launch radar for make.fun's token-radar-01 bounty ($1,325, deadline 14 Dec 2026).
+The token launch radar for make.fun's token-radar-01 bounty: 240 pre-token
+protocols ranked by implied value, each with a seven-step farm plan.
 
-## What it does
+## The model
 
-`main.ts` reads the sealed DeFiLlama snapshot (`/input/snapshot.json`), ranks every
-launch candidate — a protocol that records no token and is not a versioned, wrapped,
-staked or bridged product of a protocol whose token already trades, nor an exchange —
-by its peer-calibrated implied value, and writes the board, the dashboard data, the
-dashboard, the screenshots and the dossier into the output directory.
+Implied value = TVL x multiple x growth x maturity. The multiple is the
+category's comparables multiple: the median mcap/TVL of the snapshot's
+tokened peers in that category, shrunk toward the market median by peer
+count and clamped to [0.15, 0.60]. Categories with fewer than 5 tokened
+peers use the market median. Growth is the 7-day TVL change clamped to
+[-60%, +120%] at half weight; maturity is 0.6 plus up to 0.4 for up to
+three years listed with no token.
 
-## The model (lib/model.ts)
+## The universe
 
-```
-implied value = TVL x peer multiple x growth x age
-```
+The 40-protocol house watchlist is the floor. Above the floor, every
+pre-token protocol passing the watchlist's own exclusion rule joins it.
+Below the floor, pre-token protocols join by TVL until the board holds
+240 rows.
 
-- **Peer multiple**: the median market-cap / TVL of the tokened protocols in the
-  same category, computed at run time from the snapshot. A category with fewer
-  than 3 tokened peers falls back to the market-wide median (0.2138 on this
-  snapshot). Multiples are clamped to 0.02–2.00. No protocol name is hardcoded.
-- **Growth**: the protocol's 7-day TVL change, mapped to a 0.80–1.40 factor.
-- **Age**: +10% per year the protocol has run with no token recorded, capped at +20%.
-
-On the 2026-11-14 snapshot this gives 198 launch candidates, the house watchlist
-covered 40/40, topped by Steakhouse Financial at about $669M implied value.
-
-## The dashboard
-
-`dashboard/` is a static page (no network): a sortable, filterable board of 15 rows
-per page, a detail view for every protocol with its value breakdown and seven
-concrete farm steps (each priced in gas and timed), a diversity strip, and the full
-peer-multiples table the model used.
-
-## Run it
+## Run
 
 ```
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <path to snapshot.json>
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 ```
-
-Two runs on the same snapshot write the same bytes.
 
 ## License
 
-MIT — see LICENSE.
+MIT. See LICENSE.

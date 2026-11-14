@@ -1,85 +1,95 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Limber Equinox — Token Launch Radar</title>
+<title>Limber Meridian — Token Launch Radar</title>
 <link rel="stylesheet" href="app.css">
+<script src="../data.js"></script>
+<script src="app.js" defer></script>
 </head>
 <body>
-<header class="top">
+<header class="masthead">
   <div class="brand">
-    <div class="mark">LE</div>
+    <div class="mark">LM</div>
     <div>
-      <h1>Limber Equinox</h1>
-      <p class="tag">Token Launch Radar — pre-token protocols, ranked by peer-calibrated implied value</p>
+      <h1>Limber Meridian</h1>
+      <p class="tagline">Token Launch Radar &middot; radar-6 &middot; shrunk comparables</p>
     </div>
   </div>
-  <p class="meta" id="metaLine">Loading the sealed snapshot…</p>
+  <div class="mast-meta" id="mastMeta"></div>
 </header>
 
-<section class="method">
-  <h2>How the value is worked out</h2>
-  <p><strong>Implied value = TVL × peer multiple × growth × age.</strong>
-  The peer multiple is the median market-cap / TVL of the tokened protocols in the same category
-  (at least 3 peers, otherwise the market-wide median <span id="globalMedian">…</span>),
-  clamped to 0.02–2.00. Growth reads the 7-day TVL change; age reads how long the protocol has
-  run with no token recorded. Nothing here is a hardcoded list of names — every number comes
-  from the snapshot itself, so the same program ranks a snapshot taken next month.</p>
-  <p class="caveat">“Records no token” is what the snapshot says — it is not proof a protocol has none.
-  Implied values are this radar’s own claim, never a price and never a promise.</p>
-</section>
+<section class="stats" id="stats"></section>
 
-<section class="controls">
-  <input id="q" type="search" placeholder="Search a protocol…" aria-label="Search protocols">
-  <select id="cat" aria-label="Filter by category"></select>
-  <select id="sort" aria-label="Sort the board">
-    <option value="value">Sort: implied value</option>
-    <option value="tvl">Sort: TVL</option>
-    <option value="growth">Sort: 7-day growth</option>
-    <option value="age">Sort: longest listed</option>
-  </select>
-  <label class="check"><input id="wl" type="checkbox"> Watchlist only</label>
-</section>
-
-<section class="diversity" id="diversity" aria-label="Board mix by category"></section>
+<nav class="tabs" id="tabs">
+  <button data-tab="board" class="active">Board</button>
+  <button data-tab="live">Live tokens</button>
+  <button data-tab="multiples">Multiples</button>
+  <button data-tab="method">How it works</button>
+</nav>
 
 <main>
-  <table id="board">
-    <thead>
-      <tr>
-        <th>#</th><th>Protocol</th><th>Category</th><th>Chains</th>
-        <th class="num">TVL</th><th class="num">7d</th><th class="num">Peer ×</th>
-        <th class="num">Implied value</th><th></th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <div class="pager">
-    <button id="prev" type="button">← Prev 15</button>
-    <span id="pageInfo"></span>
-    <button id="next" type="button">Next 15 →</button>
-  </div>
+  <section id="tab-board" class="tabpage active">
+    <div class="controls">
+      <input id="search" type="search" placeholder="Search a protocol&hellip;" autocomplete="off">
+      <select id="categoryFilter" aria-label="Filter by category"></select>
+      <select id="sortBy" aria-label="Sort the board">
+        <option value="rank">Sort: rank</option>
+        <option value="implied">Sort: implied value</option>
+        <option value="tvl">Sort: TVL</option>
+        <option value="growth">Sort: 7-day growth</option>
+      </select>
+      <span class="count" id="rowCount"></span>
+    </div>
+    <div class="strip" id="strip"></div>
+    <table class="board">
+      <thead>
+        <tr>
+          <th class="num">#</th><th>Protocol</th><th>Category</th><th>Chains</th>
+          <th class="num">TVL</th><th class="num">7d</th><th class="num">&times; multiple</th>
+          <th class="num">Implied value</th><th>Farm: core action</th>
+        </tr>
+      </thead>
+      <tbody id="boardBody"></tbody>
+    </table>
+    <p class="hint">Click any row for the full farm plan and the model behind its rank.</p>
+    <div id="detail"></div>
+  </section>
+
+  <section id="tab-live" class="tabpage">
+    <p class="lede">These tokens already trade. The board shows the market's own value for them &mdash; never a model's. They are also the comparables the multiples are measured from.</p>
+    <table class="board">
+      <thead>
+        <tr><th>Protocol</th><th>Category</th><th>Chains</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Mcap / TVL</th><th class="num">7d</th></tr>
+      </thead>
+      <tbody id="liveBody"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-multiples" class="tabpage">
+    <p class="lede">Each category's multiple is the median mcap/TVL of its tokened peers, shrunk toward the market median by peer count and clamped to [0.15, 0.60]. Categories with fewer than 5 tokened peers use the market median. The market median is <b id="marketMultiple"></b>.</p>
+    <table class="board">
+      <thead>
+        <tr><th>Category</th><th class="num">Tokened peers</th><th class="num">Raw median</th><th class="num">Multiple</th><th>Basis</th></tr>
+      </thead>
+      <tbody id="multiplesBody"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-method" class="tabpage">
+    <h2>How the radar works</h2>
+    <p><b>What it ranks.</b> The board ranks the protocols the snapshot records as having no token, by what that token would be worth if the protocol's record stayed as it is. It never predicts whether or when a token is issued. &ldquo;Records no token&rdquo; is what the snapshot says; a protocol on the board may still have a token its record does not carry.</p>
+    <p><b>The universe.</b> The 40 protocols on the house watchlist are the floor. Above the floor, every pre-token protocol that passes the watchlist's own exclusion rule joins them &mdash; no exchange, no bridge or staking product of a token that already trades, no wrapped or staked name, no version pool. Below the floor, pre-token protocols join by TVL until the board holds 240 rows. The floor is a floor, never a ceiling.</p>
+    <p><b>The value.</b> Implied value = TVL &times; multiple &times; growth &times; maturity. The multiple is the category's comparables multiple, shrunk toward the market median and clamped to [0.15, 0.60], so no category can price a protocol at a wild multiple of its TVL. Growth is the 7-day TVL change, clamped to [&minus;60%, +120%], at half weight. Maturity is 0.6 plus up to 0.4 for up to three years listed with no token. Every figure comes from the sealed snapshot; no protocol name is ever special-cased.</p>
+    <p><b>The farm plan.</b> Each row carries seven steps with what they cost and how long they take, derived from the protocol's own category, chains, TVL and age. Steps are written for the protocol, not copied from a list.</p>
+    <p><b>Separation.</b> Protocols whose token already trades are kept apart in the Live view at their market value. The board never mixes a market value into a ranked row.</p>
+  </section>
 </main>
 
-<section id="detail" class="detail" hidden></section>
-
-<section class="model">
-  <h2>Peer multiples used on this board</h2>
-  <p>Median market-cap / TVL of the tokened protocols in each category, taken from the same snapshot.
-  “Market median” marks a category with fewer than 3 tokened peers, where the market-wide median is used instead.</p>
-  <table id="multiples">
-    <thead><tr><th>Category</th><th class="num">Tokened peers</th><th class="num">Multiple</th><th>Source</th></tr></thead>
-    <tbody id="multRows"></tbody>
-  </table>
-</section>
-
 <footer>
-  <p>Built from the sealed DeFiLlama snapshot of <span id="asOf">…</span> — 758 protocols at or above $5M TVL,
-  40 on the house watchlist, <span id="rowCount">…</span> launch candidates ranked here.
-  Do your own research; farming costs gas and time, and a launch may never come.</p>
+  <span>Limber Meridian &middot; radar-6 &middot; data: sealed snapshot, as of <span id="footDate"></span></span>
+  <span>Built with superbot.gg</span>
 </footer>
-<script src="../data.js"></script>
-<script src="app.js"></script>
 </body>
 </html>

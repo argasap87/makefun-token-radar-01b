@@ -1,213 +1,190 @@
-// Limber Equinox dashboard: renders the board window.LIMBER_DATA carries.
-// Board, detail view and filters are all driven by that data — no network,
-// no hardcoded rows. Hash routes: #detail/<slug>, #filter/<category>,
-// #watchlist (watchlist-only view).
+// Limber Meridian dashboard: renders window.RADAR, no network, no fetch.
 (function () {
-  "use strict";
-  var D = window.LIMBER_DATA;
-  var PAGE = 15;
+  var D = window.RADAR;
+  if (!D) return;
 
-  function $(id) { return document.getElementById(id); }
   function esc(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  function money(n) {
-    if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
-    if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M";
-    if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "K";
-    return "$" + Math.round(n);
+  function money(v) {
+    if (v === null || v === undefined) return '—';
+    if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    return '$' + Math.round(v);
   }
   function pct(v) {
-    if (v == null) return "—";
-    var s = (v > 0 ? "+" : "") + v.toFixed(1) + "%";
-    return '<span class="' + (v > 0 ? "up" : v < 0 ? "down" : "") + '">' + s + "</span>";
+    if (v === null || v === undefined) return '—';
+    var s = (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+    return s;
   }
-  function ageYears(listedAt) {
-    if (!listedAt) return null;
-    var days = (new Date(D.as_of + "T00:00:00Z") - new Date(listedAt + "T00:00:00Z")) / 86400000;
-    if (!(days > 0)) return null;
-    return days / 365;
+  function growthClass(v) {
+    if (v === null || v === undefined) return '';
+    return v > 0 ? 'up' : v < 0 ? 'down' : '';
   }
+  function $(id) { return document.getElementById(id); }
 
-  var state = { q: "", cat: "All", wl: false, sort: "value", page: 0, sel: null };
+  // Masthead and stats.
+  $('mastMeta').innerHTML =
+    'Snapshot as of <b>' + esc(D.as_of) + '</b><br>' +
+    esc(D.watchlist_size) + ' watchlist &middot; ' + esc(D.board_size) + ' rows &middot; ' + esc(D.live_size) + ' live';
+  var top = D.rows[0];
+  $('stats').innerHTML =
+    '<div class="stat"><div class="k">Top implied value</div><div class="v">' + money(top.implied_value_usd) + ' <small>' + esc(top.name) + '</small></div></div>' +
+    '<div class="stat"><div class="k">Market multiple</div><div class="v">' + D.market_multiple.toFixed(3) + ' <small>median mcap / TVL</small></div></div>' +
+    '<div class="stat"><div class="k">Board rows</div><div class="v">' + D.board_size + ' <small>' + D.early_size + ' beyond the watchlist</small></div></div>' +
+    '<div class="stat"><div class="k">Watchlist covered</div><div class="v">' + D.watchlist_size + ' / ' + D.watchlist_size + ' <small>every slug</small></div></div>';
+  $('footDate').textContent = D.as_of;
+  $('marketMultiple').textContent = D.market_multiple.toFixed(4);
 
-  function filtered() {
+  // Tabs.
+  var tabButtons = document.querySelectorAll('#tabs button');
+  function showTab(name) {
+    tabButtons.forEach(function (b) { b.classList.toggle('active', b.dataset.tab === name); });
+    document.querySelectorAll('.tabpage').forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + name); });
+  }
+  tabButtons.forEach(function (b) {
+    b.addEventListener('click', function () { showTab(b.dataset.tab); });
+  });
+
+  // Category filter options.
+  var categories = [];
+  D.rows.forEach(function (r) {
+    if (r.category && categories.indexOf(r.category) === -1) categories.push(r.category);
+  });
+  categories.sort();
+  var filter = $('categoryFilter');
+  filter.innerHTML = '<option value="">All categories</option>' +
+    categories.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+
+  // Diversity strip: the ten biggest categories on the board.
+  var counts = {};
+  D.rows.forEach(function (r) {
+    var c = r.category || '(no category)';
+    counts[c] = (counts[c] || 0) + 1;
+  });
+  var topCats = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 10);
+  $('strip').innerHTML = topCats.map(function (c) {
+    return '<span class="chip" data-cat="' + esc(c) + '">' + esc(c) + ' <b>' + counts[c] + '</b></span>';
+  }).join('');
+  document.querySelectorAll('#strip .chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      var c = chip.dataset.cat;
+      filter.value = categories.indexOf(c) === -1 ? '' : c;
+      document.querySelectorAll('#strip .chip').forEach(function (x) { x.classList.toggle('on', x === chip); });
+      renderBoard();
+    });
+  });
+
+  var selectedSlug = null;
+
+  function visibleRows() {
+    var q = $('search').value.trim().toLowerCase();
+    var cat = filter.value;
     var rows = D.rows.filter(function (r) {
-      if (state.wl && !r.watchlist) return false;
-      if (state.cat !== "All" && r.category !== state.cat) return false;
-      if (state.q) {
-        var q = state.q.toLowerCase();
-        if (r.name.toLowerCase().indexOf(q) < 0 && r.slug.indexOf(q) < 0) return false;
-      }
+      if (cat && r.category !== cat) return false;
+      if (q && (r.name.toLowerCase().indexOf(q) === -1 && r.slug.indexOf(q) === -1)) return false;
       return true;
     });
-    if (state.sort === "tvl") rows.sort(function (a, b) { return b.tvl_usd - a.tvl_usd; });
-    else if (state.sort === "growth") rows.sort(function (a, b) { return (b.change_7d || 0) - (a.change_7d || 0); });
-    else if (state.sort === "age") rows.sort(function (a, b) {
-      var ya = ageYears(a.listed_at), yb = ageYears(b.listed_at);
-      if (ya == null && yb == null) return 0;
-      if (ya == null) return 1;
-      if (yb == null) return -1;
-      return yb - ya;
-    });
+    var sort = $('sortBy').value;
+    if (sort === 'implied') rows.sort(function (a, b) { return b.implied_value_usd - a.implied_value_usd; });
+    else if (sort === 'tvl') rows.sort(function (a, b) { return b.tvl_usd - a.tvl_usd; });
+    else if (sort === 'growth') rows.sort(function (a, b) { return (b.change_7d === null ? -1e9 : b.change_7d) - (a.change_7d === null ? -1e9 : a.change_7d); });
     else rows.sort(function (a, b) { return a.rank - b.rank; });
     return rows;
   }
 
   function renderBoard() {
-    var rows = filtered();
-    var pages = Math.max(1, Math.ceil(rows.length / PAGE));
-    if (state.page >= pages) state.page = pages - 1;
-    if (state.page < 0) state.page = 0;
-    var slice = rows.slice(state.page * PAGE, state.page * PAGE + PAGE);
-    $("rows").innerHTML = slice.map(function (r) {
-      return "<tr data-slug=\"" + esc(r.slug) + "\" class=\"" + (state.sel === r.slug ? "sel" : "") + "\">" +
-        "<td class=\"rank\">" + r.rank + "</td>" +
-        "<td class=\"name\">" + esc(r.name) + (r.watchlist ? " <span class=\"star\" title=\"On the house watchlist\">★</span>" : "") + "</td>" +
-        "<td class=\"cat\">" + esc(r.category) + "</td>" +
-        "<td class=\"cat\">" + esc(r.chains.slice(0, 2).join(", ")) + (r.chains.length > 2 ? " +" + (r.chains.length - 2) : "") + "</td>" +
-        "<td class=\"num\">" + money(r.tvl_usd) + "</td>" +
-        "<td class=\"num\">" + pct(r.change_7d) + "</td>" +
-        "<td class=\"num\">" + r.multiple.toFixed(2) + (r.multiple_fallback ? "*" : "") + "</td>" +
-        "<td class=\"num val\">" + money(r.implied_value_usd) + "</td>" +
-        "<td><button type=\"button\" data-detail=\"" + esc(r.slug) + "\">Farm →</button></td>" +
-        "</tr>";
-    }).join("");
-    $("pageInfo").textContent = "Page " + (state.page + 1) + " of " + pages + " · " + rows.length + " rows · 15 per page";
-    $("prev").disabled = state.page === 0;
-    $("next").disabled = state.page >= pages - 1;
-  }
-
-  function renderDiversity() {
-    $("diversity").innerHTML = D.diversity.map(function (d) {
-      return "<span class=\"chip" + (state.cat === d.category ? " on" : "") + "\" data-cat=\"" + esc(d.category) + "\">" +
-        esc(d.category) + " <b>" + d.count + "</b></span>";
-    }).join("");
-  }
-
-  function renderDetail() {
-    var box = $("detail");
-    if (!state.sel) { box.hidden = true; box.innerHTML = ""; return; }
-    var r = null;
-    for (var i = 0; i < D.rows.length; i++) if (D.rows[i].slug === state.sel) { r = D.rows[i]; break; }
-    if (!r) { box.hidden = true; return; }
-    var multNote = r.multiple_fallback
-      ? "market median — fewer than 3 tokened peers in " + esc(r.category)
-      : "median of " + r.peers + " tokened " + esc(r.category) + " peers";
-    box.hidden = false;
-    box.innerHTML =
-      "<button type=\"button\" class=\"close\" id=\"closeDetail\">Close ✕</button>" +
-      "<h2>#" + r.rank + " " + esc(r.name) + (r.watchlist ? " <span class=\"star\">★ watchlist</span>" : "") + "</h2>" +
-      "<p class=\"sub\">" + esc(r.category) + " · " + esc(r.chains.join(", ")) +
-      (r.listed_at ? " · tracked since " + esc(r.listed_at) : " · listing date unreported") +
-      " · records no token</p>" +
-      "<div class=\"breakdown\">" +
-      "<div class=\"cell\"><div class=\"k\">TVL</div><div class=\"v\">" + money(r.tvl_usd) + "</div></div>" +
-      "<div class=\"cell\"><div class=\"k\">Peer multiple</div><div class=\"v\">" + r.multiple.toFixed(3) + "×</div></div>" +
-      "<div class=\"cell\"><div class=\"k\">Growth ×</div><div class=\"v\">" + r.growth_factor.toFixed(3) + "</div></div>" +
-      "<div class=\"cell\"><div class=\"k\">Age ×</div><div class=\"v\">" + r.age_factor.toFixed(3) + "</div></div>" +
-      "<div class=\"cell\"><div class=\"k\">Implied value</div><div class=\"v gold\">" + money(r.implied_value_usd) + "</div></div>" +
-      "</div>" +
-      "<p class=\"formula\">" + money(r.tvl_usd) + " TVL × " + r.multiple.toFixed(3) + " peer multiple (" + multNote + ") × " +
-      r.growth_factor.toFixed(3) + " growth (" + (r.change_7d == null ? "7d change unreported" : (r.change_7d > 0 ? "+" : "") + r.change_7d.toFixed(1) + "% in 7 days") + ") × " +
-      r.age_factor.toFixed(3) + " age = <strong>" + money(r.implied_value_usd) + "</strong></p>" +
-      "<h3>How to farm it</h3><ol>" +
-      r.farm_steps.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") +
-      "</ol>";
-    $("closeDetail").addEventListener("click", function () {
-      state.sel = null;
-      if (window.location.hash) history.replaceState(null, "", window.location.pathname + window.location.search);
-      renderBoard(); renderDetail();
+    var rows = visibleRows();
+    $('rowCount').textContent = rows.length + ' of ' + D.board_size + ' rows';
+    $('boardBody').innerHTML = rows.map(function (r) {
+      var core = r.farm_steps && r.farm_steps.length > 1 ? r.farm_steps[1] : (r.farm_steps[0] || '');
+      return '<tr data-slug="' + esc(r.slug) + '"' + (r.slug === selectedSlug ? ' class="selected"' : '') + '>' +
+        '<td class="num rank">#' + r.rank + '</td>' +
+        '<td class="name">' + esc(r.name) + '<small>' + esc(r.slug) + '</small></td>' +
+        '<td class="cat">' + esc(r.category || '—') + '</td>' +
+        '<td class="cat">' + esc((r.chains || []).slice(0, 2).join(', ') || '—') + '</td>' +
+        '<td class="num">' + money(r.tvl_usd) + '</td>' +
+        '<td class="num ' + growthClass(r.change_7d) + '">' + pct(r.change_7d) + '</td>' +
+        '<td class="num">&times;' + r.multiple.toFixed(3) + '</td>' +
+        '<td class="num val">' + money(r.implied_value_usd) + '</td>' +
+        '<td class="step">' + esc(core) + '</td></tr>';
+    }).join('');
+    document.querySelectorAll('#boardBody tr').forEach(function (tr) {
+      tr.addEventListener('click', function () { showDetail(tr.dataset.slug); });
     });
   }
 
-  function renderMultiples() {
-    $("multRows").innerHTML = D.multiples.map(function (m) {
-      return "<tr><td>" + esc(m.category) + "</td><td class=\"num\">" + m.peers + "</td>" +
-        "<td class=\"num val\">" + m.multiple.toFixed(4) + "×</td>" +
-        "<td class=\"cat\">" + (m.fallback ? "Market median" : "Category peers") + "</td></tr>";
-    }).join("");
+  function showDetail(slug) {
+    var r = null;
+    for (var i = 0; i < D.rows.length; i++) if (D.rows[i].slug === slug) { r = D.rows[i]; break; }
+    selectedSlug = slug;
+    if (!r) { $('detail').innerHTML = ''; renderBoard(); return; }
+    var age = r.age_days === null ? 'unknown age' : r.age_days + ' days listed';
+    var basisNote = r.multiple_basis === 'measured' ? 'measured from ' + r.peers + ' tokened peers'
+      : r.multiple_basis === 'market' ? 'market median (' + r.peers + ' peers, too few to measure)'
+      : r.multiple_basis === 'floored' ? 'measured, floored at 0.15'
+      : 'measured, capped at 0.60';
+    var why = 'Implied ' + money(r.implied_value_usd) + ' = ' + money(r.tvl_usd) + ' TVL &times; ' + r.multiple.toFixed(3) +
+      ' multiple (' + basisNote + ') &times; ' + r.growth_multiplier.toFixed(2) + ' growth &times; ' +
+      r.maturity_multiplier.toFixed(2) + ' maturity. Ranked #' + r.rank + ' because its TVL at that multiple beats every protocol below it.';
+    $('detail').innerHTML =
+      '<div class="detail-card"><h2><span class="rank">#' + r.rank + '</span>' + esc(r.name) + '</h2>' +
+      '<p class="sub">' + esc(r.category || 'No category') + ' &middot; ' + esc((r.chains || []).join(', ') || 'no chain listed') +
+      ' &middot; TVL ' + money(r.tvl_usd) + ' &middot; 7d <span class="' + growthClass(r.change_7d) + '">' + pct(r.change_7d) +
+      '</span> &middot; ' + age + '</p>' +
+      '<div class="model-line"><span>Multiple <b>&times;' + r.multiple.toFixed(3) + '</b> <span class="dim">' + esc(basisNote) + '</span></span>' +
+      '<span>Growth <b>&times;' + r.growth_multiplier.toFixed(2) + '</b></span>' +
+      '<span>Maturity <b>&times;' + r.maturity_multiplier.toFixed(2) + '</b></span>' +
+      '<span>Implied value <b>' + money(r.implied_value_usd) + '</b></span></div>' +
+      '<p class="why"><b>Why this rank.</b> ' + why + '</p>' +
+      '<h3>Farm plan &mdash; seven steps</h3><ol>' +
+      r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') +
+      '</ol></div>';
+    document.querySelectorAll('#boardBody tr').forEach(function (tr) {
+      tr.classList.toggle('selected', tr.dataset.slug === slug);
+    });
+    var card = document.querySelector('.detail-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
+  // Live tokens.
+  $('liveBody').innerHTML = D.live.map(function (p) {
+    var ratio = p.mcap_usd !== null && p.tvl_usd > 0 ? (p.mcap_usd / p.tvl_usd).toFixed(3) : '—';
+    return '<tr><td class="name">' + esc(p.name) + '<small>' + esc(p.slug) + '</small></td>' +
+      '<td class="cat">' + esc(p.category || '—') + '</td>' +
+      '<td class="cat">' + esc((p.chains || []).slice(0, 2).join(', ') || '—') + '</td>' +
+      '<td class="num">' + money(p.tvl_usd) + '</td>' +
+      '<td class="num val">' + money(p.mcap_usd) + '</td>' +
+      '<td class="num">&times;' + ratio + '</td>' +
+      '<td class="num ' + growthClass(p.change_7d) + '">' + pct(p.change_7d) + '</td></tr>';
+  }).join('');
+
+  // Multiples table.
+  $('multiplesBody').innerHTML = D.multiples.map(function (m) {
+    return '<tr><td class="name">' + esc(m.category) + '</td>' +
+      '<td class="num">' + m.peers + '</td>' +
+      '<td class="num">' + (m.raw_median === null ? '—' : '&times;' + m.raw_median.toFixed(3)) + '</td>' +
+      '<td class="num val">&times;' + m.multiple.toFixed(3) + '</td>' +
+      '<td class="cat">' + esc(m.basis) + '</td></tr>';
+  }).join('');
+
+  $('search').addEventListener('input', renderBoard);
+  filter.addEventListener('change', renderBoard);
+  $('sortBy').addEventListener('change', renderBoard);
+
+  // Hash routing for deep links: #detail=<slug> and #filter=<category>.
   function applyHash() {
-    var h = window.location.hash || "";
-    // A new hash replaces the whole view: clear the previous selection,
-    // filter and watchlist flag first, then set what the hash names.
-    state.sel = null; state.cat = "All"; state.wl = false; state.scrollBoard = false;
-    if (h.indexOf("#detail/") === 0) {
-      state.sel = decodeURIComponent(h.slice(8));
-    } else if (h.indexOf("#filter/") === 0) {
-      state.cat = decodeURIComponent(h.slice(8));
-    } else if (h === "#watchlist") {
-      state.wl = true;
-    } else if (h === "#board") {
-      state.scrollBoard = true;
-    }
-    var sel = $("cat");
-    if (sel) sel.value = state.cat;
-    var cb = $("wl");
-    if (cb) cb.checked = state.wl;
-    state.page = 0;
+    var h = location.hash.replace(/^#/, '');
+    var params = {};
+    h.split('&').forEach(function (part) {
+      var kv = part.split('=');
+      if (kv[0]) params[kv[0]] = decodeURIComponent(kv[1] || '');
+    });
+    if (params.filter && categories.indexOf(params.filter) !== -1) filter.value = params.filter;
+    renderBoard();
+    if (params.detail) showDetail(params.detail);
   }
-
-  // Deep links land on their view: a #detail/ link opens the detail panel in
-  // view, #board puts the board's 15 rows in view. Instant scroll so a
-  // screenshot taken on load sees the target, not the top of the page.
-  function scrollToHash() {
-    if (state.sel) {
-      var det = $("detail");
-      if (det && !det.hidden) det.scrollIntoView({ behavior: "auto", block: "start" });
-    } else if (state.scrollBoard) {
-      var main = document.querySelector("main");
-      if (main) main.scrollIntoView({ behavior: "auto", block: "start" });
-    }
-  }
-
-  function renderAll() {
-    renderDiversity(); renderBoard(); renderDetail();
-  }
-
-  // Static chrome.
-  $("metaLine").textContent = "Snapshot " + D.as_of + " · " + D.snapshot_protocols +
-    " protocols at $5M+ TVL · " + D.watchlist_count + " on the house watchlist · " +
-    D.rows.length + " launch candidates ranked · ★ = watchlist";
-  $("globalMedian").textContent = D.global_median_multiple.toFixed(4);
-  $("asOf").textContent = D.as_of;
-  $("rowCount").textContent = D.rows.length;
-  var catSel = $("cat");
-  catSel.innerHTML = "<option value=\"All\">All categories</option>" +
-    D.diversity.map(function (d) { return "<option value=\"" + esc(d.category) + "\">" + esc(d.category) + " (" + d.count + ")</option>"; }).join("");
-  renderMultiples();
-
-  // Events.
-  $("q").addEventListener("input", function (e) { state.q = e.target.value; state.page = 0; renderBoard(); });
-  catSel.addEventListener("change", function (e) { state.cat = e.target.value; state.page = 0; renderAll(); });
-  $("sort").addEventListener("change", function (e) { state.sort = e.target.value; state.page = 0; renderBoard(); });
-  $("wl").addEventListener("change", function (e) { state.wl = e.target.checked; state.page = 0; renderBoard(); });
-  $("prev").addEventListener("click", function () { state.page--; renderBoard(); });
-  $("next").addEventListener("click", function () { state.page++; renderBoard(); });
-  $("diversity").addEventListener("click", function (e) {
-    var chip = e.target.closest("[data-cat]");
-    if (!chip) return;
-    state.cat = state.cat === chip.getAttribute("data-cat") ? "All" : chip.getAttribute("data-cat");
-    catSel.value = state.cat;
-    state.page = 0; renderAll();
-  });
-  $("rows").addEventListener("click", function (e) {
-    var btn = e.target.closest("[data-detail]");
-    var tr = e.target.closest("tr[data-slug]");
-    var slug = btn ? btn.getAttribute("data-detail") : tr ? tr.getAttribute("data-slug") : null;
-    if (!slug) return;
-    state.sel = slug;
-    history.replaceState(null, "", "#detail/" + encodeURIComponent(slug));
-    renderBoard(); renderDetail();
-    $("detail").scrollIntoView({ behavior: "auto", block: "start" });
-  });
-  window.addEventListener("hashchange", function () { applyHash(); renderAll(); scrollToHash(); });
-
+  window.addEventListener('hashchange', applyHash);
   applyHash();
-  renderAll();
-  scrollToHash();
 })();
